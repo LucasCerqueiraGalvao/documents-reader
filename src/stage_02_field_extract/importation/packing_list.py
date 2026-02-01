@@ -30,24 +30,37 @@ RE_TOTAL_LINE = re.compile(r"(?im)^\s*([0-9\.,]+)\s+([0-9\.,]+)\s*$")
 
 RE_SHIPPER_HINT = re.compile(r"(?is)\b(SUZUKI[^\n]{0,80})\b")
 
+
 def extract_packing_list_fields(text: str):
     warnings: list[str] = []
     fields: dict = {}
 
     docno, ev = find_first(RE_ANY_DOC_NO, text)
-    fields["packing_list_number"] = build_field(bool(docno), True, docno, [ev] if ev else [], "regex")
+    fields["packing_list_number"] = build_field(
+        bool(docno), True, docno, [ev] if ev else [], "regex"
+    )
 
     # shipper/exporter
     m = RE_SHIPPER_HINT.search(text or "")
     shipper = m.group(1).strip() if m else None
-    fields["shipper_name"] = build_field(bool(shipper), True, shipper, [m.group(0)] if m else [], "heuristic_regex")
+    fields["shipper_name"] = build_field(
+        bool(shipper), True, shipper, [m.group(0)] if m else [], "heuristic_regex"
+    )
 
     # consignee/importer
     consignee_name, ev_name = find_company_line_before_cnpj(text)
-    fields["consignee_name"] = build_field(bool(consignee_name), True, consignee_name, [ev_name] if ev_name else [], "heuristic_line_before_cnpj")
+    fields["consignee_name"] = build_field(
+        bool(consignee_name),
+        True,
+        consignee_name,
+        [ev_name] if ev_name else [],
+        "heuristic_line_before_cnpj",
+    )
 
     cnpj, ev = find_cnpj(text)
-    fields["consignee_cnpj"] = build_field(bool(cnpj), True, cnpj, [ev] if ev else [], "regex")
+    fields["consignee_cnpj"] = build_field(
+        bool(cnpj), True, cnpj, [ev] if ev else [], "regex"
+    )
 
     # totals (unidades/cartons)
     tu, tc = None, None
@@ -55,8 +68,12 @@ def extract_packing_list_fields(text: str):
     if m2:
         tu = int(m2.group(1))
         tc = int(m2.group(2))
-    fields["total_units"] = build_field(tu is not None, True, tu, [m2.group(0)] if m2 else [], "regex")
-    fields["total_cartons"] = build_field(tc is not None, True, tc, [m2.group(0)] if m2 else [], "regex")
+    fields["total_units"] = build_field(
+        tu is not None, True, tu, [m2.group(0)] if m2 else [], "regex"
+    )
+    fields["total_cartons"] = build_field(
+        tc is not None, True, tc, [m2.group(0)] if m2 else [], "regex"
+    )
 
     # parse por modelo (usa seu formato: MODEL + linha com @net @gross + m3)
     lines = (text or "").splitlines()
@@ -92,34 +109,49 @@ def extract_packing_list_fields(text: str):
                     ev_total = m_tot.group(0)
                     i += 1  # consome linha total
 
-            items.append({
-                "model": current_model,
-                "carton_range": carton_range,
-                "cartons": cartons,
-                "net_weight_per_pkg_kg": net_pkg,
-                "gross_weight_per_pkg_kg": gross_pkg,
-                "measurement_per_pkg_m3": m3_pkg,
-                "measurement_total_m3": m3_total,
-                "net_weight_total_kg": net_total,
-                "gross_weight_total_kg": gross_total,
-                "evidence_row": m_row.group(0),
-                "evidence_totals": ev_total,
-            })
+            items.append(
+                {
+                    "model": current_model,
+                    "carton_range": carton_range,
+                    "cartons": cartons,
+                    "net_weight_per_pkg_kg": net_pkg,
+                    "gross_weight_per_pkg_kg": gross_pkg,
+                    "measurement_per_pkg_m3": m3_pkg,
+                    "measurement_total_m3": m3_total,
+                    "net_weight_total_kg": net_total,
+                    "gross_weight_total_kg": gross_total,
+                    "evidence_row": m_row.group(0),
+                    "evidence_totals": ev_total,
+                }
+            )
         i += 1
 
-    fields["items"] = build_field(bool(items), False, items if items else None, [it["evidence_row"] for it in items[:5]], "regex_items")
+    fields["items"] = build_field(
+        bool(items),
+        False,
+        items if items else None,
+        [it["evidence_row"] for it in items[:5]],
+        "regex_items",
+    )
 
     # totais calculados (se tiver totals em cada item)
     net_sum = 0.0
     gross_sum = 0.0
     has_totals = False
     for it in items:
-        if it.get("net_weight_total_kg") is not None and it.get("gross_weight_total_kg") is not None:
+        if (
+            it.get("net_weight_total_kg") is not None
+            and it.get("gross_weight_total_kg") is not None
+        ):
             net_sum += float(it["net_weight_total_kg"])
             gross_sum += float(it["gross_weight_total_kg"])
             has_totals = True
 
-    fields["net_weight_kg_total_calc"] = build_field(has_totals, False, net_sum if has_totals else None, [], "calculated_sum")
-    fields["gross_weight_kg_total_calc"] = build_field(has_totals, False, gross_sum if has_totals else None, [], "calculated_sum")
+    fields["net_weight_kg_total_calc"] = build_field(
+        has_totals, False, net_sum if has_totals else None, [], "calculated_sum"
+    )
+    fields["gross_weight_kg_total_calc"] = build_field(
+        has_totals, False, gross_sum if has_totals else None, [], "calculated_sum"
+    )
 
     return fields, warnings

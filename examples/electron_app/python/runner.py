@@ -25,9 +25,13 @@ def _find_repo_root(start: Path) -> Optional[Path]:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Documents Reader Pipeline (bundled)")
-    ap.add_argument("--input", required=True, help="Input base dir (contains importation/raw)")
+    ap.add_argument(
+        "--input", required=True, help="Input base dir (contains importation/raw)"
+    )
     ap.add_argument("--output", required=True, help="Output base dir")
-    ap.add_argument("--flow", default="importation", choices=["importation", "exportation"])
+    ap.add_argument(
+        "--flow", default="importation", choices=["importation", "exportation"]
+    )
     ap.add_argument("--ocr-lang", default="eng+por")
     ap.add_argument("--ocr-dpi", type=int, default=300)
     ap.add_argument("--min-chars", type=int, default=80)

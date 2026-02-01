@@ -1,5 +1,5 @@
 # Stage 04 Report — Importação
-- Gerado em: **2026-02-01T14:14:27**
+- Gerado em: **2026-02-01T10:22:51**
 - Status final: **FAIL**
 - Motivos: divergencias_stage03=2
 
@@ -24,8 +24,11 @@
 - Total checks: 11 | matches: 9 | divergences: 2 | skipped: 0
 
 ### Divergências
-- [pair] invoice_vs_bl | INVOICE.pdf <> BL.pdf | ? | A=GHANDI SECAF VEICULOS LTDA. | B=GHANDI SECAF VEICU LOS LTDA. Received by the Carrier from the Shipper in apparent good order and condition unless otherwise indicated herein, the
-- [pair] packing_vs_bl | PACKING LIST.pdf <> BL.pdf | ? | A=GHANDI SECAF VEICULOS LTDA. AUG. 28,2025 | B=GHANDI SECAF VEICU LOS LTDA. Received by the Carrier from the Shipper in apparent good order and condition unless otherwise indicated herein, the
+- [pair] invoice_vs_packing | INVOICE.pdf <> PACKING LIST.pdf | ? | A=9825.0 | B=4584.857
+- [pair] invoice_vs_packing | INVOICE.pdf <> PACKING LIST.pdf | ? | A=7980.0 | B=5429.23
+- [pair] invoice_vs_bl | INVOICE.pdf <> BL.pdf | ? | A=GHANDI SECAF VEICULOS LTDA. | B=FESS) E
+- [pair] packing_vs_bl | PACKING LIST.pdf <> BL.pdf | ? | A=GHANDI SECAF VEICULOS LTDA. AUG. 28,2025 | B=FESS) E
+- [pair] packing_vs_bl | PACKING LIST.pdf <> BL.pdf | ? | A=4584.857 | B=9825.0
 
 ### Skipped (não comparados)
 - (nenhum)

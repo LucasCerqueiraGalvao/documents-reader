@@ -81,7 +81,18 @@ def parse_mixed_number(s: str) -> Optional[float]:
         else:
             s = s.replace(",", "")
     elif has_comma and not has_dot:
-        s = s.replace(".", "").replace(",", ".")
+        left, right = s.split(",", 1)
+        # Heurística: se houver exatamente 3 dígitos após a vírgula, tratar como milhar.
+        # Ex: 7,980 -> 7980 (muito comum em pesos desses docs)
+        if (
+            left.isdigit()
+            and right.isdigit()
+            and len(right) == 3
+            and 1 <= len(left) <= 3
+        ):
+            s = left + right
+        else:
+            s = s.replace(".", "").replace(",", ".")
     else:
         s = s.replace(",", "")
 

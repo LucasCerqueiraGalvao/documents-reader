@@ -228,16 +228,91 @@ def normalize_stage03(stage03_obj: dict) -> Dict[str, Any]:
     # ---------
     if "comparisons" in stage03_obj:
         pairs = [_ensure_field(x) for x in (stage03_obj.get("comparisons") or [])]
+        groups = stage03_obj.get("groups") or stage03_obj.get("group_checks") or []
+        rules = stage03_obj.get("rules") or stage03_obj.get("rule_checks") or []
+
+        groups = [_ensure_group_rule_field(dict(x), "group_check") for x in groups]
+        rules = [_ensure_group_rule_field(dict(x), "rule_check") for x in rules]
+
         summary = stage03_obj.get("summary") or {}
+
+        # formato A legado: total_checks / matches / divergences / skipped
+        if any(k in summary for k in ("total_checks", "matches", "divergences", "skipped")):
+            return {
+                "pairs": pairs,
+                "groups": groups,
+                "rules": rules,
+                "summary": {
+                    "total": int(summary.get("total_checks", 0) or 0),
+                    "matches": int(summary.get("matches", 0) or 0),
+                    "divergences": int(summary.get("divergences", 0) or 0),
+                    "skipped": int(summary.get("skipped", 0) or 0),
+                },
+            }
+
+        # formato h?brido: summary com pair_checks / group_checks / rule_checks
+        def _read_pair(block: dict) -> tuple[int, int, int, int]:
+            if not isinstance(block, dict):
+                return (0, 0, 0, 0)
+            total = int(block.get("total", 0) or 0)
+            matches = int(block.get("matches", 0) or 0)
+            divergences = int(block.get("divergences", 0) or 0)
+            skipped = int(block.get("skipped", 0) or 0)
+            if total and matches == 0 and (divergences or skipped):
+                matches = max(total - divergences - skipped, 0)
+            return (total, matches, divergences, skipped)
+
+        def _read_group(block: dict) -> tuple[int, int, int, int]:
+            if not isinstance(block, dict):
+                return (0, 0, 0, 0)
+            total = int(block.get("total", 0) or 0)
+            divergences = int(block.get("divergences", 0) or 0)
+            missing = int(block.get("missing", 0) or 0)
+            matches = max(total - divergences - missing, 0) if total else 0
+            skipped = missing
+            return (total, matches, divergences, skipped)
+
+        def _read_rule(block: dict) -> tuple[int, int, int, int]:
+            if not isinstance(block, dict):
+                return (0, 0, 0, 0)
+            total = int(block.get("total", 0) or 0)
+            divergences = int(block.get("divergences", 0) or 0)
+            skipped = int(block.get("skipped", 0) or 0)
+            matches = max(total - divergences - skipped, 0) if total else 0
+            return (total, matches, divergences, skipped)
+
+        t1, m1, d1, s1 = _read_pair(summary.get("pair_checks") or {})
+        t2, m2, d2, s2 = _read_group(summary.get("group_checks") or {})
+        t3, m3, d3, s3 = _read_rule(summary.get("rule_checks") or {})
+
+        if (t1 + t2 + t3) > 0:
+            return {
+                "pairs": pairs,
+                "groups": groups,
+                "rules": rules,
+                "summary": {
+                    "total": (t1 + t2 + t3),
+                    "matches": (m1 + m2 + m3),
+                    "divergences": (d1 + d2 + d3),
+                    "skipped": (s1 + s2 + s3),
+                },
+            }
+
+        # fallback: calcula em cima das listas
+        all_items = pairs + groups + rules
+        total = len(all_items)
+        matches = sum(1 for x in all_items if (x.get("status") in ("match", "ok", "pass")))
+        divs = sum(1 for x in all_items if (x.get("status") in ("divergent", "fail", "error")))
+        skps = sum(1 for x in all_items if (x.get("status") in ("skipped", "missing")))
         return {
             "pairs": pairs,
-            "groups": [],
-            "rules": [],
+            "groups": groups,
+            "rules": rules,
             "summary": {
-                "total": int(summary.get("total_checks", 0) or 0),
-                "matches": int(summary.get("matches", 0) or 0),
-                "divergences": int(summary.get("divergences", 0) or 0),
-                "skipped": int(summary.get("skipped", 0) or 0),
+                "total": total,
+                "matches": matches,
+                "divergences": divs,
+                "skipped": skps,
             },
         }
 
@@ -398,13 +473,13 @@ def build_markdown(report: dict) -> str:
     if not d2:
         lines.append("_Sem dados do Stage 02._")
     else:
-        lines.append("| Doc | Kind | Status | Missing | Warnings | Fields |")
+        lines.append("| Doc | Kind | Status | Missing | Warnings | Required |")
         lines.append("|---|---|---|---|---|---:|")
         for d in d2:
             miss = ", ".join(d.get("missing_required_fields") or []) or "-"
             warn = "; ".join(d.get("warnings") or []) or "-"
             lines.append(
-                f"| {d.get('original_file','')} | {d.get('doc_kind','')} | {d.get('status','')} | {miss} | {warn} | {d.get('fields_count',0)} |"
+                f"| {d.get('original_file','')} | {d.get('doc_kind','')} | {d.get('status','')} | {miss} | {warn} | {d.get('required_present',0)} / {d.get('required_total',0)} |"
             )
     lines.append("")
 
@@ -476,7 +551,7 @@ def build_stage02_table_html(stage02_docs: List[dict]) -> str:
           <td><span class="badge {badge_class}">{tr(status_badge)}</span><br><span class="muted">{tr("missing_required_fields="+str(len(d.get("missing_required_fields") or [])) if status=="FAIL" else "warnings="+str(len(d.get("warnings") or [])) if status=="ALERT" else "no_missing_no_warnings")}</span></td>
           <td>{tr(miss)}</td>
           <td>{tr(warn)}</td>
-          <td style="text-align:right">{tr(d.get("fields_count",0))} / {tr(d.get("required_total",0) or d.get("fields_count",0))}</td>
+          <td style="text-align:right">{tr(d.get("required_present",0))} / {tr(d.get("required_total",0))}</td>
         </tr>
         """
         )
@@ -489,7 +564,7 @@ def build_stage02_table_html(stage02_docs: List[dict]) -> str:
           <th>Status</th>
           <th>Missing</th>
           <th>Warnings</th>
-          <th style="text-align:right">Fields</th>
+          <th style="text-align:right">Required</th>
         </tr>
       </thead>
       <tbody>

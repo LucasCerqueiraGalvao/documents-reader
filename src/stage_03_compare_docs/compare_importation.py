@@ -627,6 +627,86 @@ def get_doc_kind(d: dict) -> str:
     return (d.get("source") or {}).get("doc_kind") or "unknown"
 
 
+
+# Shipper name matching (looser heuristic for brand + corp suffix variance)
+SHIPPER_STOPWORDS = {
+    "LTDA", "LTD", "S", "A", "SA", "INC", "LLC", "CORP", "CORPORATION", "COMPANY", "CO",
+    "INDUSTRIA", "INDUSTRIAL", "COMERCIO", "COMERCIAL", "LOGISTICS", "LOGIX",
+    "MOTOR", "MOTORS", "OUTBOARD", "EXPORT", "EXPORTER", "SHIPPER",
+}
+INCOTERM_TOKENS = {"EXW", "FCA", "FAS", "FOB", "CFR", "CIF", "CPT", "CIP", "DAP", "DPU", "DDP", "DAT"}
+
+
+def shipper_close(a: Any, b: Any) -> bool:
+    if token_overlap_close(a, b):
+        return True
+
+    na = norm_str(a)
+    nb = norm_str(b)
+    if not na or not nb:
+        return False
+
+    ta = [t for t in na.split() if len(t) >= 4]
+    tb = [t for t in nb.split() if len(t) >= 4]
+
+    # remove common stopwords and incoterms
+    ta = [t for t in ta if t not in SHIPPER_STOPWORDS and t not in INCOTERM_TOKENS]
+    tb = [t for t in tb if t not in SHIPPER_STOPWORDS and t not in INCOTERM_TOKENS]
+
+    if not ta or not tb:
+        return False
+
+    if set(ta) & set(tb):
+        return True
+
+    return False
+
+
+def group_check_equal_shipper(
+    name: str, docs: List[dict], aliases_by_kind: Dict[str, List[str]]
+) -> dict:
+    items = []
+    values_norm = []
+    missing = []
+    for d in docs:
+        k = get_doc_kind(d)
+        keys = aliases_by_kind.get(k, [])
+        v, ev, used = get_field_any(d, keys) if keys else (None, [], None)
+        lbl = doc_label(d)
+        if is_blank(v):
+            missing.append(lbl)
+        items.append(
+            {
+                "doc": lbl,
+                "doc_kind": k,
+                "key_used": used,
+                "value": v,
+                "evidence": (ev[:2] if ev else []),
+            }
+        )
+        values_norm.append(v)
+
+    present_values = [v for v in values_norm if v]
+    if missing:
+        status = "missing"
+        reason = f"missing_in: {', '.join(missing)}"
+    elif not present_values:
+        status = "missing"
+        reason = "no_values_found"
+    else:
+        base = present_values[0]
+        ok = all(shipper_close(v, base) for v in present_values if v)
+        status = "match" if ok else "divergent"
+        reason = "all_equal_soft" if ok else "values_differ"
+
+    return {
+        "group_check": name,
+        "status": status,
+        "reason": reason,
+        "items": items,
+    }
+
+
 def group_check_equal_string(
     name: str, docs: List[dict], aliases_by_kind: Dict[str, List[str]]
 ) -> dict:
@@ -912,7 +992,7 @@ def run_stage_03_comparison(
 
     if core_docs_for_shipper:
         group_checks.append(
-            group_check_equal_string(
+            group_check_equal_shipper(
                 name="shipper_exporter_equal_across_invoice_packing_bl",
                 docs=core_docs_for_shipper,
                 aliases_by_kind={

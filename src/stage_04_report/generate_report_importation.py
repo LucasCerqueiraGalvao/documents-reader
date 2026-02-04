@@ -919,6 +919,21 @@ def run_stage_04_report(
             st = (c.get("status") or "").lower()
             item = dict(c)
             item["bucket"] = bucket_name[:-1]
+
+            # enrich values for report visibility
+            if bucket_name == "groups" and item.get("items"):
+                vals = []
+                for it in item.get("items") or []:
+                    doc = it.get("doc") or it.get("doc_kind") or "doc"
+                    val = it.get("value")
+                    vals.append(f"{doc}: {val}")
+                item.setdefault("a_value", "; ".join(vals))
+            if bucket_name == "rules":
+                if item.get("invoice_incoterm") is not None:
+                    item.setdefault("a_value", item.get("invoice_incoterm"))
+                if item.get("bl_freight_mode") is not None:
+                    item.setdefault("b_value", item.get("bl_freight_mode"))
+
             if st in ("divergent", "fail", "error"):
                 divergent.append(item)
             elif st in ("skipped", "missing"):

@@ -190,6 +190,11 @@ ipcRenderer.on('process-documents', async (event, files) => {
 - **Stage 03**: `_stage03_comparison.json`
 - **Stage 04**: `_stage04_report.json`, `_stage04_report.html`, `_stage04_report.md`
 
+## Validation Documentation
+
+- Technical reference (Markdown): `docs/importation_checks_reference.md`
+- Executive version (PDF): `docs/importation_checks_reference.pdf`
+
 ## Electron App
 
 Working desktop UI is available at [examples/electron_app](examples/electron_app).

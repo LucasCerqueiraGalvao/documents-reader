@@ -132,6 +132,12 @@ def build_stage02_section(stage02_docs: List[dict]) -> Dict[str, Any]:
         src = d.get("source") or {}
         fields = d.get("fields") or {}
         missing = d.get("missing_required_fields") or []
+        if not missing:
+            missing = [
+                k
+                for k, v in fields.items()
+                if (v or {}).get("required") is True and (v or {}).get("present") is not True
+            ]
         warnings = d.get("warnings") or []
 
         required_total = sum(
@@ -915,7 +921,7 @@ def run_stage_04_report(
             item["bucket"] = bucket_name[:-1]
             if st in ("divergent", "fail", "error"):
                 divergent.append(item)
-            elif st == "skipped":
+            elif st in ("skipped", "missing"):
                 skipped.append(item)
             elif st in ("match", "ok", "pass"):
                 matches.append(item)

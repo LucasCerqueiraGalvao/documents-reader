@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -67,28 +68,68 @@ def _make_styles():
             textColor=colors.HexColor("#475569"),
         )
     )
+    styles.add(
+        ParagraphStyle(
+            name="TblHeader",
+            parent=styles["BodyText"],
+            fontName="Helvetica-Bold",
+            fontSize=8.8,
+            leading=10.8,
+            textColor=colors.white,
+        )
+    )
+    styles.add(
+        ParagraphStyle(
+            name="TblCell",
+            parent=styles["BodyText"],
+            fontName="Helvetica",
+            fontSize=8.2,
+            leading=10.2,
+            textColor=colors.HexColor("#1E293B"),
+        )
+    )
     return styles
 
 
-def _styled_table(rows, col_widths):
-    table = Table(rows, colWidths=col_widths, repeatRows=1)
+def _wrap_identifier(text: str) -> str:
+    parts = [p for p in text.split("_") if p]
+    if len(parts) <= 1:
+        return escape(text)
+    return "<br/>".join(escape(p) for p in parts)
+
+
+def _to_paragraph_rows(rows, styles, wrap_first_col=False):
+    out = []
+    for row_idx, row in enumerate(rows):
+        out_row = []
+        for col_idx, val in enumerate(row):
+            raw = "" if val is None else str(val)
+            if wrap_first_col and row_idx > 0 and col_idx == 0:
+                txt = _wrap_identifier(raw)
+            else:
+                txt = escape(raw).replace("\n", "<br/>")
+            p_style = styles["TblHeader"] if row_idx == 0 else styles["TblCell"]
+            out_row.append(Paragraph(txt, p_style))
+        out.append(out_row)
+    return out
+
+
+def _styled_table(rows, col_widths, styles, wrap_first_col=False):
+    table_rows = _to_paragraph_rows(rows, styles, wrap_first_col=wrap_first_col)
+    table = Table(table_rows, colWidths=col_widths, repeatRows=1)
     table.setStyle(
         TableStyle(
             [
                 ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0A5EA8")),
                 ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("FONTSIZE", (0, 0), (-1, 0), 9),
                 ("ALIGN", (0, 0), (-1, 0), "LEFT"),
                 ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#FFFFFF")),
-                ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
-                ("FONTSIZE", (0, 1), (-1, -1), 8.2),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
                 ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#CBD5E1")),
                 ("LEFTPADDING", (0, 0), (-1, -1), 5),
                 ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-                ("TOPPADDING", (0, 0), (-1, -1), 5),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
             ]
         )
     )
@@ -130,7 +171,7 @@ def build_pdf(output_file: Path) -> None:
 
     story.append(Paragraph("1.1 Invoice", styles["SubSection"]))
     invoice_rows = [
-        ["Campo", "Obrigatorio", "Regra"],
+        ["Campo", "Obrigatorio", "Regra de extracao/validacao"],
         ["invoice_number", "Sim", "Regex INVOICE NO + fallback DN-xxxxx"],
         ["invoice_date", "Sim", "Regex de data em ingles"],
         ["payment_terms", "Sim", "Busca ADVANCE PAYMENT/PAYMENT TERMS"],
@@ -148,12 +189,12 @@ def build_pdf(output_file: Path) -> None:
         ["freight_and_expenses", "Nao", "Varredura por keywords"],
         ["line_items", "Nao", "Parser de itens"],
     ]
-    story.append(_styled_table(invoice_rows, [4.2 * cm, 2.2 * cm, 8.6 * cm]))
+    story.append(_styled_table(invoice_rows, [4.0 * cm, 2.2 * cm, 8.8 * cm], styles))
 
     story.append(Spacer(1, 8))
     story.append(Paragraph("1.2 Packing List", styles["SubSection"]))
     packing_rows = [
-        ["Campo", "Obrigatorio", "Regra"],
+        ["Campo", "Obrigatorio", "Regra de extracao/validacao"],
         ["invoice_number", "Sim", "Regex de referencia documental"],
         ["importer_name", "Sim", "Linha antes do CNPJ + limpeza OCR"],
         ["shipper_name", "Nao", "Heuristica SHIPPER/EXPORTER ou ACCOUNT OF"],
@@ -164,7 +205,7 @@ def build_pdf(output_file: Path) -> None:
         ["measurement_total_m3", "Sim", "M3 da linha TOTAL"],
         ["items", "Sim", "Parser tabular de itens"],
     ]
-    story.append(_styled_table(packing_rows, [4.2 * cm, 2.2 * cm, 8.6 * cm]))
+    story.append(_styled_table(packing_rows, [4.0 * cm, 2.2 * cm, 8.8 * cm], styles))
     story.append(
         Paragraph(
             "Observacoes: aceita CARTON/CARTONS, item unico ou faixa, e usa TOTAL como fonte final quando houver divergencia na soma dos itens.",
@@ -175,7 +216,7 @@ def build_pdf(output_file: Path) -> None:
     story.append(Spacer(1, 8))
     story.append(Paragraph("1.3 BL/HBL", styles["SubSection"]))
     bl_rows = [
-        ["Campo", "Obrigatorio", "Regra"],
+        ["Campo", "Obrigatorio", "Regra de extracao/validacao"],
         ["shipper_name", "Sim", "Bloco SHIPPER com limpeza de ruido"],
         ["importer_name", "Sim", "Bloco CONSIGNEE proximo ao CNPJ"],
         ["importer_cnpj", "Sim", "Regex de CNPJ"],
@@ -183,7 +224,7 @@ def build_pdf(output_file: Path) -> None:
         ["gross_weight_kg", "Sim", "Regex OCR robusta + fallback M3/CBM"],
         ["freight_terms", "Nao", "Detecta COLLECT ou PREPAID"],
     ]
-    story.append(_styled_table(bl_rows, [4.2 * cm, 2.2 * cm, 8.6 * cm]))
+    story.append(_styled_table(bl_rows, [4.0 * cm, 2.2 * cm, 8.8 * cm], styles))
 
     story.append(Paragraph("2. Stage 03 - Comparacoes", styles["Section"]))
     pair_items = [
@@ -203,18 +244,18 @@ def build_pdf(output_file: Path) -> None:
 
     story.append(Spacer(1, 6))
     method_rows = [
-        ["Tipo", "Regra"],
+        ["Tipo", "Regra de comparacao"],
         ["number", "Comparacao numerica com tolerancia (tipicamente abs 1.0 e rel 1%)."],
         ["string", "Similaridade por tokens + contencao textual."],
         ["cnpj", "Igualdade exata dos digitos."],
         ["docref", "Normalizacao + tolerancia ao sufixo P."],
     ]
-    story.append(_styled_table(method_rows, [3.0 * cm, 12.0 * cm]))
+    story.append(_styled_table(method_rows, [3.0 * cm, 12.0 * cm], styles))
 
     story.append(Spacer(1, 8))
     story.append(Paragraph("Group checks e Rule check", styles["SubSection"]))
     checks_rows = [
-        ["Check", "Descricao"],
+        ["Check", "Descricao da validacao"],
         [
             "shipper_exporter_equal_across_invoice_packing_bl",
             "Valida coerencia de shipper/exporter entre Invoice, Packing e BL com regra textual flexivel.",
@@ -228,7 +269,7 @@ def build_pdf(output_file: Path) -> None:
             "Valida Incoterm vs modo de frete (FOB/FCA/EXW->COLLECT; CFR/CIF/CPT/CIP/DAP/DPU/DDP->PREPAID).",
         ],
     ]
-    story.append(_styled_table(checks_rows, [6.4 * cm, 8.6 * cm]))
+    story.append(_styled_table(checks_rows, [5.2 * cm, 9.8 * cm], styles, wrap_first_col=True))
 
     story.append(Paragraph("3. Status e auditoria", styles["Section"]))
     status_rows = [
@@ -238,7 +279,7 @@ def build_pdf(output_file: Path) -> None:
         ["skipped", "Nao comparado por falta de dado/condicao."],
         ["missing", "Campo ausente, principalmente em check de grupo."],
     ]
-    story.append(_styled_table(status_rows, [3.0 * cm, 12.0 * cm]))
+    story.append(_styled_table(status_rows, [3.0 * cm, 12.0 * cm], styles))
 
     story.append(Spacer(1, 6))
     story.append(

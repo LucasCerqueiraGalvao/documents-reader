@@ -15,7 +15,7 @@ import json
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 # imports locais (arquivos na mesma pasta)
 # - Quando roda como script: `python extract_fields_importation.py` (imports diretos)
@@ -67,48 +67,32 @@ def _match_any(text: str, patterns: list[str]) -> bool:
     return False
 
 
-def detect_kind(original_file: str, full_text: str) -> str:
-    name = (original_file or "").upper()
+def normalize_doc_kind_hint(v: Any) -> Optional[str]:
+    if v is None:
+        return None
+    s = str(v).strip().lower()
+    aliases = {
+        "invoice": "invoice",
+        "commercial_invoice": "invoice",
+        "packing_list": "packing_list",
+        "packing list": "packing_list",
+        "pl": "packing_list",
+        "bl": "bl",
+        "bill_of_lading": "bl",
+        "hbl": "hbl",
+        "di": "di",
+        "li": "li",
+    }
+    return aliases.get(s)
+
+
+def detect_kind(full_text: str) -> str:
     text = (full_text or "").upper()
 
-    # Priorize filename hints first (UI choice is reflected on renamed filename).
-    # This avoids content false-positives (e.g., invoice text mentioning "DI").
-    if _match_any(name, [r"\bHBL\b", r"HOUSE\s+BILL"]):
-        return "hbl"
-    if _match_any(name, [r"\bBL\b", r"BILL\s+OF\s+LADING", r"B/L"]) or name.startswith("BL"):
-        return "bl"
-    if _match_any(name, [r"PACKING\s+LIST", r"PACKING", r"\bP\.?L\.?\b", r"ROMANEIO"]):
-        return "packing_list"
-    if _match_any(name, [r"COMMERCIAL\s+INVOICE", r"INVOICE", r"PRO[-\s]?FORMA", r"FATTURA"]):
-        if not _match_any(name, [r"PACKING"]):
-            return "invoice"
-    if _match_any(
-        name,
-        [
-            r"CONFERENCI[AA]\s+DI",
-            r"RASCUNHO\s+DA\s+DI",
-            r"RASCUNHO\s+DI",
-            r"\bDI(?:[\s\-_/]*\d+)?(?:\.PDF)?\b",
-            r"DECLARA[??C][A??]O\s+DE\s+IMPORTA",
-        ],
-    ):
-        return "di"
-    if _match_any(
-        name,
-        [
-            r"CONFERENCI[AA]\s+LI",
-            r"RASCUNHO\s+LI",
-            r"\bLI(?:[\s\-_/]*\d+)?(?:\.PDF)?\b",
-            r"LICEN[??C]A\s+DE\s+IMPORTA",
-        ],
-    ):
-        return "li"
-
-    # Fallback by content (strong patterns only; no bare \bDI\b/\bLI\b).
+    # Content-only fallback.
+    # UI flows should provide doc_kind_hint and bypass this function.
     if _match_any(text, [r"\bHBL\b", r"HOUSE\s+BILL"]):
         return "hbl"
-    if _match_any(text, [r"BILL\s+OF\s+LADING", r"\bB/L\b", r"\bBL\b"]):
-        return "bl"
     if _match_any(text, [r"PACKING\s+LIST", r"\bROMANEIO\b"]):
         return "packing_list"
     if _match_any(
@@ -117,9 +101,9 @@ def detect_kind(original_file: str, full_text: str) -> str:
             r"CONFERENCI[AA]\s+DI",
             r"RASCUNHO\s+DA\s+DI",
             r"RASCUNHO\s+DI",
-            r"DECLARA[??C][A??]O\s+DE\s+IMPORTA",
+            r"DECLARA[Ã‡C][AÃƒ]O\s+DE\s+IMPORTA",
             r"\bNR\.?\s*DI\b",
-            r"\bN[U?]MERO\s+DA\s+DI\b",
+            r"\bN[UÚ]MERO\s+DA\s+DI\b",
         ],
     ):
         return "di"
@@ -128,15 +112,17 @@ def detect_kind(original_file: str, full_text: str) -> str:
         [
             r"CONFERENCI[AA]\s+LI",
             r"RASCUNHO\s+LI",
-            r"LICEN[??C]A\s+DE\s+IMPORTA",
+            r"LICEN[Ã‡C]A\s+DE\s+IMPORTA",
             r"\bNR\.?\s*LI\b",
-            r"\bN[U?]MERO\s+DA\s+LI\b",
+            r"\bN[UÚ]MERO\s+DA\s+LI\b",
             r"\bNREFERENCIA\s+LI\b",
         ],
     ):
         return "li"
     if _match_any(text, [r"COMMERCIAL\s+INVOICE", r"INVOICE", r"PRO[-\s]?FORMA", r"FATTURA"]):
         return "invoice"
+    if _match_any(text, [r"BILL\s+OF\s+LADING", r"\bB/L\b", r"\bBL\b"]):
+        return "bl"
 
     return "unknown"
 
@@ -178,8 +164,9 @@ def run_stage_02_extraction(
         obj = read_json(p)
         original_file = obj.get("file") or p.name.replace("_extracted.json", ".pdf")
         full_text = join_pages(obj)
+        doc_kind_hint = normalize_doc_kind_hint(obj.get("doc_kind_hint"))
 
-        doc_kind = detect_kind(original_file, full_text)
+        doc_kind = doc_kind_hint or detect_kind(full_text)
 
         if doc_kind == "invoice":
             res = extract_invoice_fields(full_text)
@@ -203,6 +190,7 @@ def run_stage_02_extraction(
                 "stage01_file": p.name,
                 "original_file": original_file,
                 "doc_kind": doc_kind,
+                "doc_kind_hint": doc_kind_hint or "",
             },
             "generated_at": now_iso(),
             "fields": fields,

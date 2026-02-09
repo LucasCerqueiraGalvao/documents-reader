@@ -142,36 +142,28 @@ function mapDocTypeToPrefix(docType) {
 }
 
 
-function guessDocTypeFromPath(filePath) {
-  const base = String(path.basename(filePath || '')).toUpperCase();
-  if (base.includes('HBL')) return 'HBL';
-  if (
-    base.includes('CONFERENCIA DI') ||
-    base.includes('RASCUNHO DI') ||
-    /\bDI\b/.test(base) ||
-    /\bDI[\s\-_]*\d+/.test(base)
-  ) {
-    return 'DI';
-  }
-  if (
-    base.includes('CONFERENCIA LI') ||
-    base.includes('RASCUNHO LI') ||
-    /\bLI\b/.test(base) ||
-    /\bLI[\s\-_]*\d+/.test(base)
-  ) {
-    return 'LI';
-  }
-  if (base.includes('PACKING')) return 'PACKING LIST';
-  if (base.includes('INVOICE')) return 'INVOICE';
-  if (base.startsWith('BL') || base.includes('B/L') || base.includes('LADING')) return 'BL';
-  return 'INVOICE';
+function resolveDocTypeFromUi(item) {
+  const provided = String(item?.docType || '').trim();
+  return mapDocTypeToPrefix(provided);
 }
 
-function resolveDocType(item) {
-  const provided = String(item?.docType || '').trim();
-  const fromUi = mapDocTypeToPrefix(provided);
-  if (fromUi !== 'DOC') return fromUi;
-  return mapDocTypeToPrefix(guessDocTypeFromPath(item?.path || ''));
+function toStageDocKind(prefix) {
+  switch (prefix) {
+    case 'BL':
+      return 'bl';
+    case 'HBL':
+      return 'hbl';
+    case 'INVOICE':
+      return 'invoice';
+    case 'PACKING LIST':
+      return 'packing_list';
+    case 'DI':
+      return 'di';
+    case 'LI':
+      return 'li';
+    default:
+      return 'unknown';
+  }
 }
 
 async function ensureDir(dirPath) {
@@ -241,12 +233,19 @@ async function runPipeline({ files }) {
   await ensureDir(outputBase);
 
   // Copy files into run input folder with names that help doc detection.
-  const counters = { BL: 0, HBL: 0, INVOICE: 0, 'PACKING LIST': 0, DI: 0, LI: 0, DOC: 0 };
+  const counters = { BL: 0, HBL: 0, INVOICE: 0, 'PACKING LIST': 0, DI: 0, LI: 0 };
   const copied = [];
+  const docTypeHints = {};
 
   for (const item of files || []) {
     const srcPath = item.path;
-    const typePrefix = resolveDocType(item);
+    const typePrefix = resolveDocTypeFromUi(item);
+    if (typePrefix === 'DOC') {
+      return {
+        ok: false,
+        error: `Invalid document type from UI for file: ${path.basename(srcPath || '')}`,
+      };
+    }
     counters[typePrefix] = (counters[typePrefix] || 0) + 1;
 
     const suffix = counters[typePrefix] === 1 ? '' : ` ${counters[typePrefix]}`;
@@ -260,7 +259,12 @@ async function runPipeline({ files }) {
       docType: item.docType || null,
       resolvedType: typePrefix,
     });
+
+    docTypeHints[destName] = toStageDocKind(typePrefix);
   }
+
+  const hintFile = path.join(rawDir, '_doc_type_hints.json');
+  await fsp.writeFile(hintFile, JSON.stringify(docTypeHints, null, 2), 'utf-8');
 
   if (copied.length) {
     const lines = copied

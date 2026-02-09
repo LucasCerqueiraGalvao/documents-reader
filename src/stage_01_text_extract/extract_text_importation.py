@@ -27,11 +27,44 @@ class PageExtraction:
     note: str = ""
 
 
+VALID_DOC_KINDS = {"invoice", "packing_list", "bl", "hbl", "di", "li"}
+
+
 def clean_text(text: str) -> str:
     text = (text or "").replace("\x00", "")
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+
+def load_doc_type_hints(in_dir: Path) -> Dict[str, str]:
+    """
+    Optional UI-provided hints file (created by Electron app):
+      <input>/importation/raw/_doc_type_hints.json
+      {
+        "INVOICE.pdf": "invoice",
+        "PACKING LIST.pdf": "packing_list"
+      }
+    """
+    hint_file = in_dir / "_doc_type_hints.json"
+    if not hint_file.exists():
+        return {}
+    try:
+        raw = hint_file.read_bytes().decode("utf-8-sig")
+        obj = json.loads(raw)
+    except Exception:
+        return {}
+    if not isinstance(obj, dict):
+        return {}
+
+    out: Dict[str, str] = {}
+    for k, v in obj.items():
+        if not isinstance(k, str) or not isinstance(v, str):
+            continue
+        vk = v.strip().lower()
+        if vk in VALID_DOC_KINDS:
+            out[k.strip()] = vk
+    return out
 
 
 def render_page_to_pil(page: fitz.Page, dpi: int) -> Image.Image:
@@ -212,6 +245,8 @@ def run_stage_01_extraction(
         print(f"IN : {in_dir}")
         print(f"OUT: {out_dir}")
 
+    doc_type_hints = load_doc_type_hints(in_dir)
+
     results: List[dict] = []
     all_warnings: List[str] = []
 
@@ -222,6 +257,9 @@ def run_stage_01_extraction(
         payload = extract_pdf_text(
             pdf, ocr_lang=ocr_lang, ocr_dpi=ocr_dpi, min_chars=min_chars
         )
+        hint = doc_type_hints.get(pdf.name)
+        if hint:
+            payload["doc_kind_hint"] = hint
         save_outputs(out_dir, pdf, payload)
 
         direct_pages = sum(1 for p in payload["pages"] if p["method"] == "direct")
@@ -235,6 +273,7 @@ def run_stage_01_extraction(
             "file": pdf.name,
             "output_txt": str(out_dir / f"{pdf.stem}_extracted.txt"),
             "output_json": str(out_dir / f"{pdf.stem}_extracted.json"),
+            "doc_kind_hint": hint or "",
             "direct_pages": direct_pages,
             "ocr_pages": ocr_pages,
             "ocr_unavailable": ocr_missing,

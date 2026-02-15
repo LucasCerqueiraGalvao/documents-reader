@@ -22,6 +22,7 @@ on:
       - "v*"
 
 permissions:
+  actions: write
   contents: write
 
 concurrency:
@@ -83,15 +84,43 @@ jobs:
             Start-Sleep -Seconds 20
           }
 
+      - name: Cleanup old installer artifacts
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const artifactName = "DocumentsReader-windows-installer";
+            const keepLatest = 3;
+
+            const artifacts = await github.paginate(
+              github.rest.actions.listArtifactsForRepo,
+              { owner, repo, per_page: 100 }
+            );
+
+            const target = artifacts
+              .filter((a) => a.name === artifactName)
+              .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+            core.info(`Found ${target.length} artifacts named ${artifactName}`);
+
+            for (const oldArtifact of target.slice(keepLatest)) {
+              await github.rest.actions.deleteArtifact({
+                owner,
+                repo,
+                artifact_id: oldArtifact.id,
+              });
+              core.info(`Deleted artifact #${oldArtifact.id} (${oldArtifact.name})`);
+            }
+
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: DocumentsReader-windows-installer
+          retention-days: 2
           if-no-files-found: error
           path: |
             examples/electron_app/dist/*.exe
-            examples/electron_app/dist/*.blockmap
-            examples/electron_app/dist/*.yml
 
       - name: Create GitHub Release (tags)
         if: startsWith(github.ref, 'refs/tags/')

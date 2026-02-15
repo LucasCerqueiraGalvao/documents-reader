@@ -601,7 +601,7 @@ async function run() {
       }
     } else {
       setStatus('Falhou. Veja os logs.');
-      setProgress(Math.max(5, state.progress.percent), 'Pipeline falhou');
+      setProgress(100, 'Pipeline falhou');
       if (res && res.error) appendLog('\nERROR: ' + res.error + '\n');
       if (res && res.stderr) appendLog('\nSTDERR:\n' + res.stderr + '\n');
       setReportPath(null);
@@ -609,7 +609,7 @@ async function run() {
     }
   } catch (e) {
     setStatus('Erro ao executar.');
-    setProgress(Math.max(5, state.progress.percent), 'Erro ao executar pipeline');
+    setProgress(100, 'Erro ao executar pipeline');
     appendLog('\nERROR: ' + String(e) + '\n');
     setReportPath(null);
     state.detailedReportPath = null;

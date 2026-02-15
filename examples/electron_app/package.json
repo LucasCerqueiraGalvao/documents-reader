@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "description": "Electron UI for documents_reader pipeline",
+  "author": {
+    "name": "LG Data Solutions"
+  },
+  "copyright": "Copyright (c) LG Data Solutions",
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
@@ -49,6 +53,7 @@
       ]
     },
     "win": {
+      "publisherName": "LG Data Solutions",
       "extraResources": [
         {
           "from": "resources/python/win",

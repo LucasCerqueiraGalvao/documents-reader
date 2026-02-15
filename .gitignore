@@ -1,4 +1,9 @@
 .venv
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
 
 # Electron example
 .electron_runs/
@@ -6,6 +11,7 @@
 examples/electron_app/node_modules/
 examples/electron_app/.cache/
 examples/electron_app/dist/
+examples/electron_app/dist_*/
 examples/electron_app/build/
 examples/electron_app/resources/python/**/docreader-runner*
 !examples/electron_app/resources/python/**/.gitkeep
@@ -14,3 +20,6 @@ examples/electron_app/resources/tesseract/**
 !examples/electron_app/resources/tesseract/**/.gitkeep
 backup
 data/output/**
+data/output_*/
+docs/importation_update.patch
+docs/importation_checks_reference.html

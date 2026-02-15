@@ -14,7 +14,7 @@
     "smoke:tesseract": "node scripts/smoke-tesseract.js",
     "pack": "electron-builder --dir",
     "dist:mac": "electron-builder --mac",
-    "dist:win": "electron-builder --win",
+    "dist:win": "electron-builder --win --config.win.signAndEditExecutable=false",
     "dist:win:full": "node scripts/dist-win-full.js",
     "dist:linux": "electron-builder --linux"
   },

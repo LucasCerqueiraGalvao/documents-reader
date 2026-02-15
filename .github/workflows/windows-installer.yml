@@ -62,11 +62,26 @@ jobs:
         working-directory: examples/electron_app
         shell: pwsh
         env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
           # Optional override; if empty, script uses its default URL.
           TESSERACT_WIN_URL: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tesseract_win_url || '' }}
           TESS_LANGS: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tess_langs || 'eng+por' }}
           TESSDATA_VARIANT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tessdata_variant || 'fast' }}
-        run: npm run dist:win:full
+        run: |
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            Write-Host "Build attempt $attempt/3"
+            if (Test-Path dist) {
+              Remove-Item -Recurse -Force dist -ErrorAction SilentlyContinue
+            }
+            npm run dist:win:full
+            if ($LASTEXITCODE -eq 0) {
+              break
+            }
+            if ($attempt -eq 3) {
+              exit $LASTEXITCODE
+            }
+            Start-Sleep -Seconds 20
+          }
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4

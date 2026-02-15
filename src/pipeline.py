@@ -17,6 +17,9 @@ from stage_02_field_extract.importation.extract_fields_importation import (
 )
 from stage_03_compare_docs.compare_importation import run_stage_03_comparison
 from stage_04_report.generate_report_importation import run_stage_04_report
+from stage_05_debug_report.generate_debug_report_importation import (
+    run_stage_05_debug_report,
+)
 
 
 @dataclass
@@ -96,6 +99,23 @@ def run_pipeline(config: PipelineConfig) -> PipelineResult:
         output_files["stage_04_json"] = str(stage04_out / "_stage04_report.json")
         output_files["stage_04_html"] = str(stage04_out / "_stage04_report.html")
         output_files["stage_04_md"] = str(stage04_out / "_stage04_report.md")
+
+        # Stage 05: Detailed debug report (full Stage02 + Stage03).
+        # This stage is non-blocking for the main user flow.
+        try:
+            stage05_out = config.output_dir / "stage_05_debug_report" / config.flow
+            result_05 = run_stage_05_debug_report(
+                stage02_dir=stage02_out,
+                stage03_file=stage03_out / "_stage03_comparison.json",
+                out_dir=stage05_out,
+            )
+            stages_completed.append("stage_05_debug_report")
+            output_files["stage_05_json"] = str(stage05_out / "_stage05_debug_report.json")
+            output_files["stage_05_html"] = str(stage05_out / "_stage05_debug_report.html")
+            output_files["stage_05_md"] = str(stage05_out / "_stage05_debug_report.md")
+            warnings.extend(result_05.get("warnings", []))
+        except Exception as stage05_error:
+            warnings.append(f"stage_05_debug_report_failed: {stage05_error}")
 
         return PipelineResult(
             success=True,

@@ -110,6 +110,9 @@ def process_single_stage(stage_num: str):
 
     Stage 4: /api/v1/process/stage/4
     Request: {"stage01_dir": "...", "stage02_dir": "...", "stage03_file": "...", "out_dir": "..."}
+
+    Stage 5: /api/v1/process/stage/5
+    Request: {"stage02_dir": "...", "stage03_file": "...", "out_dir": "..."}
     """
     try:
         data = request.get_json()
@@ -152,6 +155,17 @@ def process_single_stage(stage_num: str):
 
             result = run_stage_04_report(
                 stage01_dir=Path(data["stage01_dir"]),
+                stage02_dir=Path(data["stage02_dir"]),
+                stage03_file=Path(data["stage03_file"]),
+                out_dir=Path(data["out_dir"]),
+                verbose=False,
+            )
+        elif stage_num == "5":
+            from stage_05_debug_report.generate_debug_report_importation import (
+                run_stage_05_debug_report,
+            )
+
+            result = run_stage_05_debug_report(
                 stage02_dir=Path(data["stage02_dir"]),
                 stage03_file=Path(data["stage03_file"]),
                 out_dir=Path(data["out_dir"]),

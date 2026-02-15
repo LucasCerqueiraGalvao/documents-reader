@@ -2,7 +2,8 @@ const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const fsp = require('fs/promises');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
+const { createCodexAuthManager } = require('./codexAuth');
 
 function platformResourceFolder() {
   switch (process.platform) {
@@ -95,16 +96,39 @@ async function resolveProjectRoot() {
   return null;
 }
 
-function detectVenvPython(projectRoot) {
+function detectPythonCandidates(projectRoot) {
   const candidates = [
     path.join(projectRoot, '.venv', 'bin', 'python'),
     path.join(projectRoot, '.venv', 'bin', 'python3'),
-    path.join(projectRoot, '.venv', 'Scripts', 'python.exe')
+    path.join(projectRoot, '.venv', 'Scripts', 'python.exe'),
+    process.env.DOCREADER_PYTHON || '',
+    'python',
   ];
-  for (const p of candidates) {
-    if (fs.existsSync(p)) return p;
+
+  return [...new Set(candidates.filter(Boolean))];
+}
+
+function probePython(command, cwd) {
+  const result = spawnSync(command, ['--version'], {
+    cwd,
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+
+  if (result.error) {
+    return { ok: false, error: String(result.error.message || result.error) };
   }
-  return null;
+
+  if (result.status !== 0) {
+    const detail = String(result.stderr || result.stdout || '').trim();
+    return {
+      ok: false,
+      error: detail || `exit ${result.status}`,
+    };
+  }
+
+  const version = String(result.stdout || result.stderr || '').trim();
+  return { ok: true, version };
 }
 
 function safeRunId() {
@@ -146,6 +170,95 @@ function resolveDocTypeFromUi(item) {
   const provided = String(item?.docType || '').trim();
   return mapDocTypeToPrefix(provided);
 }
+
+function broadcastToAllWindows(channel, payload) {
+  BrowserWindow.getAllWindows().forEach((w) => {
+    w.webContents.send(channel, payload);
+  });
+}
+
+function normalizeCodexIdentity(identity) {
+  if (!identity || typeof identity !== 'object') return null;
+  return {
+    sub: identity.sub || null,
+    email: identity.email || null,
+    name: identity.name || null,
+    preferredUsername: identity.preferredUsername || null,
+  };
+}
+
+function toRendererCodexStatus(status) {
+  if (!status || typeof status !== 'object') {
+    return {
+      connected: false,
+      configured: false,
+      missingConfig: [],
+      identity: null,
+      expiresAt: null,
+      provider: null,
+      configuredAt: null,
+      hasAccessToken: false,
+      isExpired: false,
+      refreshError: null,
+    };
+  }
+
+  return {
+    connected: Boolean(status.connected),
+    configured: status.configured !== false,
+    missingConfig: Array.isArray(status.missingConfig) ? status.missingConfig : [],
+    identity: normalizeCodexIdentity(status.identity),
+    expiresAt: status.expiresAt || null,
+    provider: status.provider || null,
+    configuredAt: status.configuredAt || null,
+    hasAccessToken: Boolean(status.hasAccessToken),
+    isExpired: Boolean(status.isExpired),
+    refreshError: status.refreshError || null,
+  };
+}
+
+function stringifyAuthLogDetails(details) {
+  if (details === null || typeof details === 'undefined') return null;
+  if (typeof details === 'string') return details;
+  if (typeof details === 'number' || typeof details === 'boolean') return String(details);
+  try {
+    return JSON.stringify(details);
+  } catch {
+    return String(details);
+  }
+}
+
+function toRendererCodexLog(entry) {
+  return {
+    ts: entry && entry.ts ? String(entry.ts) : new Date().toISOString(),
+    level: entry && entry.level ? String(entry.level) : 'info',
+    step: entry && entry.step ? String(entry.step) : 'unknown',
+    details: stringifyAuthLogDetails(entry ? entry.details : null),
+  };
+}
+
+function broadcastCodexAuthLog(entry) {
+  broadcastToAllWindows('codexAuth:log', toRendererCodexLog(entry));
+}
+
+function toRendererCodexAuthResponse(result) {
+  if (!result || typeof result !== 'object') return result;
+  if (!Object.prototype.hasOwnProperty.call(result, 'status')) {
+    return result;
+  }
+  return {
+    ...result,
+    status: toRendererCodexStatus(result.status),
+  };
+}
+
+const codexAuth = createCodexAuthManager({
+  readSettings,
+  writeSettings,
+  openExternal: (url) => shell.openExternal(url),
+  notifyChanged: (status) => broadcastToAllWindows('codexAuth:changed', toRendererCodexStatus(status)),
+  notifyLog: (entry) => broadcastCodexAuthLog(entry),
+});
 
 function toStageDocKind(prefix) {
   switch (prefix) {
@@ -190,10 +303,21 @@ async function tryReadJsonFile(filePath) {
   }
 }
 
-async function runPipeline({ files }) {
+async function runPipeline({ files, stage2Engine }) {
+  broadcastCodexAuthLog({
+    ts: new Date().toISOString(),
+    level: 'info',
+    step: 'pipeline.run.begin',
+    details: {
+      fileCount: Array.isArray(files) ? files.length : 0,
+      stage2Engine: String(stage2Engine || 'regex'),
+    },
+  });
+
   const bundledRunner = getBundledRunnerPath();
   const projectRoot = await resolveProjectRoot();
   const isBundled = app.isPackaged;
+  const codexAuthStatus = await codexAuth.getStatus({ autoRefresh: true });
 
   // In packaged builds we expect a bundled runner binary and do not require a project root.
   if (isBundled && !bundledRunner) {
@@ -214,12 +338,23 @@ async function runPipeline({ files }) {
           'Project root not configured. Use "Configurar Projeto" to select the folder that contains src/pipeline.py and .venv.',
       };
     }
-    pythonPath = detectVenvPython(projectRoot);
+    const pythonCandidates = detectPythonCandidates(projectRoot);
+    const probeFailures = [];
+    for (const candidate of pythonCandidates) {
+      const probe = probePython(candidate, projectRoot);
+      if (probe.ok) {
+        pythonPath = candidate;
+        break;
+      }
+      probeFailures.push(candidate + ': ' + probe.error);
+    }
+
     if (!pythonPath) {
       return {
         ok: false,
         error:
-          'Python venv not found in the selected project. Create it at .venv and install requirements (see README).',
+          'No working Python executable found. Recreate .venv or set DOCREADER_PYTHON to a valid interpreter.',
+        details: probeFailures,
       };
     }
   }
@@ -277,6 +412,57 @@ async function runPipeline({ files }) {
 
   const tessEnv = getBundledTesseractEnv();
   const runnerEnv = tessEnv ? { ...process.env, ...tessEnv } : { ...process.env };
+  runnerEnv.PYTHONUNBUFFERED = '1';
+  const requestedStage2Engine = String(stage2Engine || 'regex').trim().toLowerCase() === 'llm' ? 'llm' : 'regex';
+  const effectiveStage2Engine =
+    requestedStage2Engine === 'llm' && !codexAuthStatus?.connected ? 'regex' : requestedStage2Engine;
+  runnerEnv.DOCREADER_STAGE2_ENGINE = effectiveStage2Engine;
+  if (effectiveStage2Engine !== requestedStage2Engine) {
+    runnerEnv.DOCREADER_STAGE2_LLM_FALLBACK_REGEX = '1';
+  }
+
+  const codexContext = {
+    connected: Boolean(codexAuthStatus?.connected),
+    expiresAt: codexAuthStatus?.expiresAt || null,
+    identity: codexAuthStatus?.identity || null,
+    provider: 'codex-cli',
+  };
+
+  if (codexAuthStatus?.connected && codexAuthStatus?.token?.accessToken) {
+    runnerEnv.DOCREADER_CODEX_ACCESS_TOKEN = codexAuthStatus.token.accessToken;
+    runnerEnv.DOCREADER_CODEX_TOKEN_TYPE = codexAuthStatus.token.tokenType || 'Bearer';
+    if (codexAuthStatus.token.expiresAt) {
+      runnerEnv.DOCREADER_CODEX_EXPIRES_AT = String(codexAuthStatus.token.expiresAt);
+    }
+    if (codexAuthStatus.identity?.sub) {
+      runnerEnv.DOCREADER_CODEX_SUB = codexAuthStatus.identity.sub;
+    }
+  }
+
+  const codexContextPath = path.join(runBase, 'codex_auth_context.json');
+  await fsp.writeFile(codexContextPath, JSON.stringify(codexContext, null, 2), 'utf-8');
+  runnerEnv.DOCREADER_CODEX_AUTH_CONTEXT_FILE = codexContextPath;
+
+  const codexStatusLine = codexContext.connected
+    ? 'CODEX AUTH: connected (token available to stage_02)\n'
+    : 'CODEX AUTH: not connected\n';
+  const stage2EngineLine = `STAGE2 ENGINE: ${effectiveStage2Engine.toUpperCase()}\n`;
+  BrowserWindow.getAllWindows().forEach((w) => {
+    w.webContents.send('pipeline:log', { stream: 'stdout', text: codexStatusLine });
+    w.webContents.send('pipeline:log', { stream: 'stdout', text: stage2EngineLine });
+  });
+  broadcastCodexAuthLog({
+    ts: new Date().toISOString(),
+    level: 'info',
+    step: 'pipeline.codex.status',
+    details: {
+      connected: codexContext.connected,
+      provider: codexAuthStatus && codexAuthStatus.provider ? codexAuthStatus.provider : null,
+      expiresAt: codexContext.expiresAt,
+      requestedStage2Engine,
+      effectiveStage2Engine,
+    },
+  });
 
   let command;
   let args;
@@ -297,6 +483,7 @@ async function runPipeline({ files }) {
   } else {
     command = pythonPath;
     args = [
+      '-u',
       path.join(projectRoot, 'src', 'pipeline.py'),
       '--input',
       inputBase,
@@ -310,6 +497,13 @@ async function runPipeline({ files }) {
   }
 
   return await new Promise((resolve) => {
+    let settled = false;
+    const resolveOnce = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+
     const child = spawn(command, args, {
       cwd,
       env: runnerEnv,
@@ -334,12 +528,42 @@ async function runPipeline({ files }) {
       });
     });
 
+    child.on('error', (error) => {
+      const message = String((error && error.message) || error || 'unknown spawn error');
+      BrowserWindow.getAllWindows().forEach((w) => {
+        w.webContents.send('pipeline:log', {
+          stream: 'stderr',
+          text: 'ERROR: failed to start pipeline process: ' + message + '\n',
+        });
+      });
+      resolveOnce({
+        ok: false,
+        code: null,
+        parsed: null,
+        copied,
+        runBase,
+        inputBase,
+        outputBase,
+        codexAuth: codexContext,
+        codexAuthContextPath: codexContextPath,
+        reportPath: null,
+        stderr: message,
+        error: 'Failed to start pipeline process: ' + message,
+      });
+    });
+
     child.on('close', async (code) => {
       const reportPath = path.join(
         outputBase,
         'stage_04_report',
         'importation',
         '_stage04_report.html'
+      );
+      const debugReportPath = path.join(
+        outputBase,
+        'stage_05_debug_report',
+        'importation',
+        '_stage05_debug_report.html'
       );
 
       const stage04JsonPath = path.join(
@@ -350,6 +574,7 @@ async function runPipeline({ files }) {
       );
 
       const reportExists = fs.existsSync(reportPath);
+      const debugReportExists = fs.existsSync(debugReportPath);
       // Success is determined by the pipeline exiting OK *and* producing the Stage 4 HTML.
       // Parsing stdout is unreliable because it contains logs + pretty JSON.
       const ok = code === 0 && reportExists;
@@ -359,8 +584,13 @@ async function runPipeline({ files }) {
       if (ok && fs.existsSync(reportPath)) {
         await shell.openPath(reportPath);
       }
-
-      resolve({
+      broadcastCodexAuthLog({
+        ts: new Date().toISOString(),
+        level: ok ? 'info' : 'warn',
+        step: 'pipeline.run.finish',
+        details: { ok, exitCode: code, reportExists },
+      });
+      resolveOnce({
         ok,
         code,
         parsed,
@@ -368,7 +598,10 @@ async function runPipeline({ files }) {
         runBase,
         inputBase,
         outputBase,
+        codexAuth: codexContext,
+        codexAuthContextPath: codexContextPath,
         reportPath: reportExists ? reportPath : null,
+        debugReportPath: debugReportExists ? debugReportPath : null,
         stderr: stderr || null,
       });
     });
@@ -390,8 +623,16 @@ function createWindow() {
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   createWindow();
+  broadcastCodexAuthLog({
+    ts: new Date().toISOString(),
+    level: 'info',
+    step: 'app.ready',
+    details: { platform: process.platform },
+  });
+  const status = await codexAuth.getStatus({ autoRefresh: false });
+  broadcastToAllWindows('codexAuth:changed', toRendererCodexStatus(status));
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -413,6 +654,93 @@ ipcMain.handle('dialog:selectFiles', async () => {
 
 ipcMain.handle('pipeline:run', async (_event, payload) => {
   return await runPipeline(payload || {});
+});
+
+ipcMain.handle('codexAuth:getStatus', async (_event, payload) => {
+  const options = payload || {};
+  broadcastCodexAuthLog({
+    ts: new Date().toISOString(),
+    level: 'info',
+    step: 'ipc.codexAuth.getStatus.request',
+    details: { autoRefresh: Boolean(options.autoRefresh) },
+  });
+  const status = await codexAuth.getStatus(options);
+  const safeStatus = toRendererCodexStatus(status);
+  broadcastCodexAuthLog({
+    ts: new Date().toISOString(),
+    level: 'info',
+    step: 'ipc.codexAuth.getStatus.response',
+    details: {
+      connected: safeStatus.connected,
+      configured: safeStatus.configured,
+      provider: safeStatus.provider,
+    },
+  });
+  return safeStatus;
+});
+
+ipcMain.handle('codexAuth:start', async (_event, payload) => {
+  broadcastCodexAuthLog({
+    ts: new Date().toISOString(),
+    level: 'info',
+    step: 'ipc.codexAuth.start.request',
+    details: null,
+  });
+  const result = await codexAuth.start(payload || {});
+  const safeResult = toRendererCodexAuthResponse(result);
+  broadcastCodexAuthLog({
+    ts: new Date().toISOString(),
+    level: safeResult && safeResult.ok ? 'info' : 'warn',
+    step: 'ipc.codexAuth.start.response',
+    details: {
+      ok: Boolean(safeResult && safeResult.ok),
+      source: safeResult && safeResult.source ? safeResult.source : null,
+      error: safeResult && safeResult.error ? safeResult.error : null,
+    },
+  });
+  return safeResult;
+});
+
+ipcMain.handle('codexAuth:refresh', async () => {
+  broadcastCodexAuthLog({
+    ts: new Date().toISOString(),
+    level: 'info',
+    step: 'ipc.codexAuth.refresh.request',
+    details: null,
+  });
+  const result = await codexAuth.refresh();
+  const safeResult = toRendererCodexAuthResponse(result);
+  broadcastCodexAuthLog({
+    ts: new Date().toISOString(),
+    level: safeResult && safeResult.ok ? 'info' : 'warn',
+    step: 'ipc.codexAuth.refresh.response',
+    details: {
+      ok: Boolean(safeResult && safeResult.ok),
+      error: safeResult && safeResult.error ? safeResult.error : null,
+    },
+  });
+  return safeResult;
+});
+
+ipcMain.handle('codexAuth:logout', async () => {
+  broadcastCodexAuthLog({
+    ts: new Date().toISOString(),
+    level: 'info',
+    step: 'ipc.codexAuth.logout.request',
+    details: null,
+  });
+  const result = await codexAuth.logout();
+  const safeResult = toRendererCodexAuthResponse(result);
+  broadcastCodexAuthLog({
+    ts: new Date().toISOString(),
+    level: safeResult && safeResult.ok ? 'info' : 'warn',
+    step: 'ipc.codexAuth.logout.response',
+    details: {
+      ok: Boolean(safeResult && safeResult.ok),
+      error: safeResult && safeResult.error ? safeResult.error : null,
+    },
+  });
+  return safeResult;
 });
 
 ipcMain.handle('projectRoot:get', async () => {
@@ -440,7 +768,7 @@ ipcMain.handle('projectRoot:select', async () => {
   if (!looksLikeProjectRoot(selected)) {
     return {
       ok: false,
-      error: 'A pasta selecionada não parece um project root válido (src/pipeline.py não encontrado).',
+      error: 'A pasta selecionada nao parece um project root valido (src/pipeline.py nao encontrado).',
     };
   }
 
@@ -460,3 +788,4 @@ ipcMain.handle('report:open', async (_event, reportPath) => {
   }
   return { ok: true };
 });
+

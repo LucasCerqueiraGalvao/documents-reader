@@ -13,9 +13,18 @@
         <h1>Documents Reader</h1>
         <p class="subtitle">Selecione ou arraste PDFs, escolha o tipo, e rode o pipeline.</p>
         <p id="projectRoot" class="subtitle" style="margin-top:8px"></p>
+        <p id="codexAuthStatus" class="subtitle" style="margin-top:4px"></p>
       </div>
       <div class="actions">
-        <button id="btnProject" class="btn">Configurar Projeto</button>
+        <label class="engine-control" for="stage2Engine">
+          <span>Stage 02</span>
+          <select id="stage2Engine" class="engine-select">
+            <option value="regex">Regex</option>
+            <option value="llm">LLM (Codex)</option>
+          </select>
+        </label>
+        <button id="btnCodexConnect" class="btn">Conectar Codex</button>
+        <button id="btnCodexLogout" class="btn">Desconectar</button>
         <button id="btnPick" class="btn">Selecionar PDFs</button>
         <button id="btnRun" class="btn btn-primary" disabled>Run</button>
       </div>
@@ -41,6 +50,15 @@
           <div>
             <div class="label">Logs</div>
             <div id="status" class="muted">Pronto.</div>
+            <div id="progressWrap" class="progress-wrap">
+              <div class="progress-row">
+                <span id="progressLabel" class="muted">Progresso: aguardando execucao</span>
+                <span id="progressPct" class="muted">0%</span>
+              </div>
+              <div class="progress-bar">
+                <div id="progressFill" class="progress-fill"></div>
+              </div>
+            </div>
             <div id="reportPath" class="muted report-path" style="display:none"></div>
           </div>
           <div>
@@ -48,6 +66,9 @@
           </div>
         </div>
         <pre id="log" class="log"></pre>
+        <div class="log-footer">
+          <button id="btnOpenDetailedReport" class="btn" disabled>Abrir Report Detalhado (Stage 5)</button>
+        </div>
       </section>
     </main>
 

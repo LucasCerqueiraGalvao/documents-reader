@@ -5,11 +5,8 @@ Simple Flask-based REST API for document processing pipeline
 
 from __future__ import annotations
 
-import json
-import os
 import traceback
 from pathlib import Path
-from typing import Dict, Any
 
 try:
     from flask import Flask, request, jsonify
@@ -21,8 +18,7 @@ except ImportError:
         "Warning: flask and flask-cors not installed. Install with: pip install flask flask-cors"
     )
 
-from pipeline import run_pipeline_from_dict, PipelineConfig, run_pipeline
-from dataclasses import asdict
+from pipeline import run_pipeline_from_dict, run_single_stage_from_dict
 
 
 app = Flask(__name__) if Flask else None
@@ -89,6 +85,8 @@ def process_documents():
         status_code = 200 if result["success"] else 500
         return jsonify(result), status_code
 
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         error_trace = traceback.format_exc()
         return jsonify({"error": str(e), "traceback": error_trace}), 500
@@ -116,66 +114,15 @@ def process_single_stage(stage_num: str):
     """
     try:
         data = request.get_json()
+        if not data:
+            return jsonify({"error": "No JSON data provided"}), 400
 
-        if stage_num == "1":
-            from stage_01_text_extract.extract_text_importation import (
-                run_stage_01_extraction,
-            )
-
-            result = run_stage_01_extraction(
-                in_dir=Path(data["in_dir"]),
-                out_dir=Path(data["out_dir"]),
-                ocr_lang=data.get("ocr_lang", "eng+por"),
-                ocr_dpi=data.get("ocr_dpi", 300),
-                min_chars=data.get("min_chars", 80),
-                verbose=False,
-            )
-        elif stage_num == "2":
-            from stage_02_field_extract.importation.extract_fields_importation import (
-                run_stage_02_extraction,
-            )
-
-            result = run_stage_02_extraction(
-                in_dir=Path(data["in_dir"]),
-                out_dir=Path(data["out_dir"]),
-                verbose=False,
-            )
-        elif stage_num == "3":
-            from stage_03_compare_docs.compare_importation import (
-                run_stage_03_comparison,
-            )
-
-            result = run_stage_03_comparison(
-                in_dir=Path(data["in_dir"]),
-                out_dir=Path(data["out_dir"]),
-                verbose=False,
-            )
-        elif stage_num == "4":
-            from stage_04_report.generate_report_importation import run_stage_04_report
-
-            result = run_stage_04_report(
-                stage01_dir=Path(data["stage01_dir"]),
-                stage02_dir=Path(data["stage02_dir"]),
-                stage03_file=Path(data["stage03_file"]),
-                out_dir=Path(data["out_dir"]),
-                verbose=False,
-            )
-        elif stage_num == "5":
-            from stage_05_debug_report.generate_debug_report_importation import (
-                run_stage_05_debug_report,
-            )
-
-            result = run_stage_05_debug_report(
-                stage02_dir=Path(data["stage02_dir"]),
-                stage03_file=Path(data["stage03_file"]),
-                out_dir=Path(data["out_dir"]),
-                verbose=False,
-            )
-        else:
-            return jsonify({"error": f"Invalid stage number: {stage_num}"}), 400
+        result = run_single_stage_from_dict(int(stage_num), data)
 
         return jsonify(result), 200
 
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         error_trace = traceback.format_exc()
         return jsonify({"error": str(e), "traceback": error_trace}), 500

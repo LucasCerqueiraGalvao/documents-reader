@@ -16,6 +16,13 @@
         <p id="codexAuthStatus" class="subtitle" style="margin-top:4px"></p>
       </div>
       <div class="actions">
+        <label class="engine-control" for="flowMode">
+          <span>Modo</span>
+          <select id="flowMode" class="engine-select">
+            <option value="importation">Importation</option>
+            <option value="exportation">Exportation</option>
+          </select>
+        </label>
         <label class="engine-control" for="stage2Engine">
           <span>Stage 02</span>
           <select id="stage2Engine" class="engine-select">
@@ -39,7 +46,7 @@
 
         <div class="list-header">
           <div>Arquivos</div>
-          <div class="muted">Tipo do documento (BL / HBL / INVOICE / PACKING LIST / DI / LI)</div>
+          <div id="docTypeLegend" class="muted">Tipo do documento</div>
         </div>
 
         <div id="fileList" class="file-list"></div>

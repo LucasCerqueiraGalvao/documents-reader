@@ -4,6 +4,7 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const { spawn, spawnSync } = require('child_process');
 const { createCodexAuthManager } = require('./codexAuth');
+const CODEX_CLI_PREFLIGHT_TIMEOUT_MS = 15000;
 
 function platformResourceFolder() {
   switch (process.platform) {
@@ -172,12 +173,13 @@ function createRunLogger(logPath) {
   };
 }
 
-function probeCodexCli(command, cwd) {
+function probeCodexCli(command, cwd, timeoutMs = CODEX_CLI_PREFLIGHT_TIMEOUT_MS) {
   const result = spawnSync(command, ['--version'], {
     cwd,
     encoding: 'utf8',
     windowsHide: true,
     shell: process.platform === 'win32',
+    timeout: Math.max(1, Number(timeoutMs) || CODEX_CLI_PREFLIGHT_TIMEOUT_MS),
   });
 
   const stdout = String(result.stdout || '').trim();
@@ -185,12 +187,16 @@ function probeCodexCli(command, cwd) {
   const details = stderr || stdout || '';
 
   if (result.error) {
+    const errorText = String(result.error.message || result.error);
+    const timedOut =
+      result.error.code === 'ETIMEDOUT' || /timed out|timeout/i.test(errorText);
     return {
       ok: false,
-      error: String(result.error.message || result.error),
+      error: errorText,
       errorCode: result.error.code || null,
       stdout,
       stderr,
+      timedOut,
     };
   }
 
@@ -201,6 +207,7 @@ function probeCodexCli(command, cwd) {
       errorCode: null,
       stdout,
       stderr,
+      timedOut: false,
     };
   }
 
@@ -209,6 +216,7 @@ function probeCodexCli(command, cwd) {
     version: details || 'unknown',
     stdout,
     stderr,
+    timedOut: false,
   };
 }
 
@@ -225,8 +233,44 @@ function sanitizeBaseName(name) {
     .trim();
 }
 
-function mapDocTypeToPrefix(docType) {
-  switch ((docType || '').toUpperCase()) {
+function mapDocTypeToPrefix(docType, flow) {
+  const selectedFlow = normalizeFlow(flow);
+  const up = String(docType || '').trim().toUpperCase();
+
+  if (selectedFlow === 'exportation') {
+    switch (up) {
+      case 'COMMERCIAL INVOICE':
+      case 'COMMERCIAL_INVOICE':
+      case 'COMMERCIALINVOICE':
+      case 'INVOICE':
+        return 'COMMERCIAL INVOICE';
+      case 'PACKING LIST':
+      case 'PACKING_LIST':
+      case 'PACKINGLIST':
+        return 'PACKING LIST';
+      case 'DRAFT BL':
+      case 'DRAFT_BL':
+      case 'DRAFTBL':
+      case 'BL':
+      case 'BILL OF LADING':
+      case 'BILL_OF_LADING':
+        return 'DRAFT BL';
+      case 'CERTIFICATE OF ORIGIN':
+      case 'CERTIFICATE_OF_ORIGIN':
+      case 'CERTIFICATEOFORIGIN':
+      case 'CO':
+        return 'CERTIFICATE OF ORIGIN';
+      case 'CONTAINER DATA':
+      case 'CONTAINER_DATA':
+      case 'CONTAINERDATA':
+      case 'CNTR':
+        return 'CONTAINER DATA';
+      default:
+        return 'DOC';
+    }
+  }
+
+  switch (up) {
     case 'BL':
       return 'BL';
     case 'HBL':
@@ -247,9 +291,13 @@ function mapDocTypeToPrefix(docType) {
 }
 
 
-function resolveDocTypeFromUi(item) {
+function resolveDocTypeFromUi(item, flow) {
   const provided = String(item?.docType || '').trim();
-  return mapDocTypeToPrefix(provided);
+  return mapDocTypeToPrefix(provided, flow);
+}
+
+function normalizeFlow(value) {
+  return String(value || '').trim().toLowerCase() === 'exportation' ? 'exportation' : 'importation';
 }
 
 function broadcastToAllWindows(channel, payload) {
@@ -341,7 +389,25 @@ const codexAuth = createCodexAuthManager({
   notifyLog: (entry) => broadcastCodexAuthLog(entry),
 });
 
-function toStageDocKind(prefix) {
+function toStageDocKind(prefix, flow) {
+  const selectedFlow = normalizeFlow(flow);
+  if (selectedFlow === 'exportation') {
+    switch (prefix) {
+      case 'COMMERCIAL INVOICE':
+        return 'commercial_invoice';
+      case 'PACKING LIST':
+        return 'packing_list';
+      case 'DRAFT BL':
+        return 'draft_bl';
+      case 'CERTIFICATE OF ORIGIN':
+        return 'certificate_of_origin';
+      case 'CONTAINER DATA':
+        return 'container_data';
+      default:
+        return 'unknown';
+    }
+  }
+
   switch (prefix) {
     case 'BL':
       return 'bl';
@@ -358,6 +424,20 @@ function toStageDocKind(prefix) {
     default:
       return 'unknown';
   }
+}
+
+function createDocCounters(flow) {
+  const selectedFlow = normalizeFlow(flow);
+  if (selectedFlow === 'exportation') {
+    return {
+      'COMMERCIAL INVOICE': 0,
+      'PACKING LIST': 0,
+      'DRAFT BL': 0,
+      'CERTIFICATE OF ORIGIN': 0,
+      'CONTAINER DATA': 0,
+    };
+  }
+  return { BL: 0, HBL: 0, INVOICE: 0, 'PACKING LIST': 0, DI: 0, LI: 0 };
 }
 
 async function ensureDir(dirPath) {
@@ -384,14 +464,18 @@ async function tryReadJsonFile(filePath) {
   }
 }
 
-async function runPipeline({ files, stage2Engine }) {
+async function runPipeline({ files, stage2Engine, flow }) {
+  const requestedFlow = normalizeFlow(flow);
+  const requestedStage2Engine = String(stage2Engine || 'regex').trim().toLowerCase() === 'llm' ? 'llm' : 'regex';
+  const effectiveStage2Engine = requestedStage2Engine;
   broadcastCodexAuthLog({
     ts: new Date().toISOString(),
     level: 'info',
     step: 'pipeline.run.begin',
     details: {
       fileCount: Array.isArray(files) ? files.length : 0,
-      stage2Engine: String(stage2Engine || 'regex'),
+      stage2Engine: requestedStage2Engine,
+      requestedFlow,
     },
   });
 
@@ -443,7 +527,7 @@ async function runPipeline({ files, stage2Engine }) {
   const runBase = path.join(app.getPath('userData'), 'runs', safeRunId());
   const inputBase = path.join(runBase, 'input');
   const outputBase = path.join(runBase, 'output');
-  const rawDir = path.join(inputBase, 'importation', 'raw');
+  const rawDir = path.join(inputBase, requestedFlow, 'raw');
 
   await ensureDir(rawDir);
   await ensureDir(outputBase);
@@ -455,7 +539,9 @@ async function runPipeline({ files, stage2Engine }) {
     inputBase,
     outputBase,
     isBundled,
-    requestedStage2Engine: String(stage2Engine || 'regex'),
+    requestedFlow,
+    requestedStage2Engine,
+    effectiveStage2Engine,
     fileCount: Array.isArray(files) ? files.length : 0,
   });
   BrowserWindow.getAllWindows().forEach((w) => {
@@ -464,15 +550,19 @@ async function runPipeline({ files, stage2Engine }) {
       text: `RUN LOG: ${runLogPath}\n`,
     });
   });
-
+  const selectedFlowLine = `FLOW SELECTED (UI): ${requestedFlow.toUpperCase()}\n`;
+  runLog.stream('stdout', selectedFlowLine);
+  BrowserWindow.getAllWindows().forEach((w) => {
+    w.webContents.send('pipeline:log', { stream: 'stdout', text: selectedFlowLine });
+  });
   // Copy files into run input folder with names that help doc detection.
-  const counters = { BL: 0, HBL: 0, INVOICE: 0, 'PACKING LIST': 0, DI: 0, LI: 0 };
+  const counters = createDocCounters(requestedFlow);
   const copied = [];
   const docTypeHints = {};
 
   for (const item of files || []) {
     const srcPath = item.path;
-    const typePrefix = resolveDocTypeFromUi(item);
+    const typePrefix = resolveDocTypeFromUi(item, requestedFlow);
     if (typePrefix === 'DOC') {
       runLog.error('pipeline.input.invalid_doc_type', {
         sourcePath: srcPath || null,
@@ -504,7 +594,7 @@ async function runPipeline({ files, stage2Engine }) {
       resolvedType: typePrefix,
     });
 
-    docTypeHints[destName] = toStageDocKind(typePrefix);
+    docTypeHints[destName] = toStageDocKind(typePrefix, requestedFlow);
   }
 
   const hintFile = path.join(rawDir, '_doc_type_hints.json');
@@ -527,9 +617,6 @@ async function runPipeline({ files, stage2Engine }) {
   runnerEnv.DOCREADER_RUN_DEBUG_LOG_FILE = runLogPath;
   runnerEnv.DOCREADER_STAGE2_LLM_DETAILED_LOG =
     process.env.DOCREADER_STAGE2_LLM_DETAILED_LOG || '1';
-  const requestedStage2Engine = String(stage2Engine || 'regex').trim().toLowerCase() === 'llm' ? 'llm' : 'regex';
-  const effectiveStage2Engine =
-    requestedStage2Engine === 'llm' && !codexAuthStatus?.connected ? 'regex' : requestedStage2Engine;
   runnerEnv.DOCREADER_STAGE2_ENGINE = effectiveStage2Engine;
   // Keep strict behavior by default: LLM engine should stay LLM unless explicitly overridden.
   runnerEnv.DOCREADER_STAGE2_LLM_FALLBACK_REGEX =
@@ -581,12 +668,15 @@ async function runPipeline({ files, stage2Engine }) {
   const codexStatusLine = codexContext.connected
     ? 'CODEX AUTH: connected (token available to stage_02)\n'
     : 'CODEX AUTH: not connected\n';
-  const stage2EngineLine = `STAGE2 ENGINE: ${effectiveStage2Engine.toUpperCase()}\n`;
+  const stage2EngineRequestedLine = `STAGE2 ENGINE REQUESTED: ${requestedStage2Engine.toUpperCase()}\n`;
+  const stage2EngineEffectiveLine = `STAGE2 ENGINE EFFECTIVE: ${effectiveStage2Engine.toUpperCase()}\n`;
   runLog.stream('stdout', codexStatusLine);
-  runLog.stream('stdout', stage2EngineLine);
+  runLog.stream('stdout', stage2EngineRequestedLine);
+  runLog.stream('stdout', stage2EngineEffectiveLine);
   BrowserWindow.getAllWindows().forEach((w) => {
     w.webContents.send('pipeline:log', { stream: 'stdout', text: codexStatusLine });
-    w.webContents.send('pipeline:log', { stream: 'stdout', text: stage2EngineLine });
+    w.webContents.send('pipeline:log', { stream: 'stdout', text: stage2EngineRequestedLine });
+    w.webContents.send('pipeline:log', { stream: 'stdout', text: stage2EngineEffectiveLine });
   });
   broadcastCodexAuthLog({
     ts: new Date().toISOString(),
@@ -606,25 +696,63 @@ async function runPipeline({ files, stage2Engine }) {
     },
   });
 
+  if (requestedStage2Engine === 'llm' && !codexContext.connected) {
+    const guidance =
+      'Codex auth obrigatoria para Stage 02 LLM. Conecte o Codex na UI e tente novamente.';
+    const details = 'Token/sessao Codex indisponivel para este run.';
+    runLog.error('pipeline.codex.auth.preflight_failed', {
+      requestedStage2Engine,
+      connected: codexContext.connected,
+      details,
+    });
+    BrowserWindow.getAllWindows().forEach((w) => {
+      w.webContents.send('pipeline:log', {
+        stream: 'stderr',
+        text: `ERROR: ${guidance}\nDETAILS: ${details}\n`,
+      });
+    });
+    return {
+      ok: false,
+      code: null,
+      parsed: null,
+      copied,
+      runBase,
+      inputBase,
+      outputBase,
+      codexAuth: codexContext,
+      codexAuthContextPath: codexContextPath,
+      reportPath: null,
+      stderr: details,
+      error: guidance,
+      requestedStage2Engine,
+      effectiveStage2Engine,
+      runLogPath,
+    };
+  }
+
   if (effectiveStage2Engine === 'llm') {
     const cliCommand = String(runnerEnv.DOCREADER_CODEX_CLI_PATH || codexAuthStatus?.cliCommand || 'codex');
-    const cliProbe = probeCodexCli(cliCommand, app.getPath('userData'));
+    const cliProbe = probeCodexCli(cliCommand, app.getPath('userData'), CODEX_CLI_PREFLIGHT_TIMEOUT_MS);
     runLog.info('pipeline.codex.cli.preflight', {
       command: cliCommand,
       ok: cliProbe.ok,
       version: cliProbe.version || null,
       error: cliProbe.error || null,
       errorCode: cliProbe.errorCode || null,
+      timedOut: Boolean(cliProbe.timedOut),
+      timeoutMs: CODEX_CLI_PREFLIGHT_TIMEOUT_MS,
     });
 
     if (!cliProbe.ok) {
       const details = cliProbe.error || 'unknown error';
-      const guidance =
-        "Codex CLI indisponivel para Stage 02 LLM. Instale/garanta o comando 'codex' no sistema ou configure DOCREADER_CODEX_CLI_CMD.";
+      const guidance = cliProbe.timedOut
+        ? `Codex CLI preflight excedeu ${Math.floor(CODEX_CLI_PREFLIGHT_TIMEOUT_MS / 1000)}s.`
+        : "Codex CLI indisponivel para Stage 02 LLM. Instale/garanta o comando 'codex' no sistema ou configure DOCREADER_CODEX_CLI_PATH.";
       const text = `ERROR: ${guidance}\nDETAILS: ${details}\n`;
       runLog.error('pipeline.codex.cli.preflight_failed', {
         command: cliCommand,
         error: details,
+        timedOut: Boolean(cliProbe.timedOut),
         stderr: cliProbe.stderr || null,
         stdout: cliProbe.stdout || null,
       });
@@ -644,6 +772,8 @@ async function runPipeline({ files, stage2Engine }) {
         reportPath: null,
         stderr: details,
         error: guidance,
+        requestedStage2Engine,
+        effectiveStage2Engine,
         runLogPath,
       };
     }
@@ -661,7 +791,7 @@ async function runPipeline({ files, stage2Engine }) {
 
   if (isBundled) {
     command = bundledRunner;
-    args = ['--input', inputBase, '--output', outputBase, '--flow', 'importation', '--json'];
+    args = ['--input', inputBase, '--output', outputBase, '--flow', requestedFlow, '--json'];
     cwd = app.getPath('userData');
     // Ensure it's executable on macOS/Linux.
     if (process.platform !== 'win32') {
@@ -681,7 +811,7 @@ async function runPipeline({ files, stage2Engine }) {
       '--output',
       outputBase,
       '--flow',
-      'importation',
+      requestedFlow,
       '--json',
     ];
     cwd = projectRoot;
@@ -745,6 +875,8 @@ async function runPipeline({ files, stage2Engine }) {
         reportPath: null,
         stderr: message,
         error: 'Failed to start pipeline process: ' + message,
+        requestedStage2Engine,
+        effectiveStage2Engine,
         runLogPath,
       });
     });
@@ -753,20 +885,20 @@ async function runPipeline({ files, stage2Engine }) {
       const reportPath = path.join(
         outputBase,
         'stage_04_report',
-        'importation',
+        requestedFlow,
         '_stage04_report.html'
       );
       const debugReportPath = path.join(
         outputBase,
         'stage_05_debug_report',
-        'importation',
+        requestedFlow,
         '_stage05_debug_report.html'
       );
 
       const stage04JsonPath = path.join(
         outputBase,
         'stage_04_report',
-        'importation',
+        requestedFlow,
         '_stage04_report.json'
       );
 
@@ -808,6 +940,8 @@ async function runPipeline({ files, stage2Engine }) {
         reportPath: reportExists ? reportPath : null,
         debugReportPath: debugReportExists ? debugReportPath : null,
         stderr: stderr || null,
+        requestedStage2Engine,
+        effectiveStage2Engine,
         runLogPath,
       });
     });

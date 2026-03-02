@@ -27,7 +27,31 @@ class PageExtraction:
     note: str = ""
 
 
-VALID_DOC_KINDS = {"invoice", "packing_list", "bl", "hbl", "di", "li"}
+DOC_KIND_ALIASES = {
+    # Importation
+    "invoice": "invoice",
+    "commercial_invoice": "invoice",
+    "packing_list": "packing_list",
+    "packing list": "packing_list",
+    "pl": "packing_list",
+    "bl": "bl",
+    "bill_of_lading": "bl",
+    "hbl": "hbl",
+    "di": "di",
+    "li": "li",
+    # Exportation
+    "draft_bl": "draft_bl",
+    "certificate_of_origin": "certificate_of_origin",
+    "container_data": "container_data",
+}
+VALID_DOC_KINDS = set(DOC_KIND_ALIASES.values())
+
+
+def normalize_doc_kind_hint(v: Any) -> Optional[str]:
+    if v is None:
+        return None
+    raw = str(v).strip().lower()
+    return DOC_KIND_ALIASES.get(raw)
 
 
 def clean_text(text: str) -> str:
@@ -61,9 +85,9 @@ def load_doc_type_hints(in_dir: Path) -> Dict[str, str]:
     for k, v in obj.items():
         if not isinstance(k, str) or not isinstance(v, str):
             continue
-        vk = v.strip().lower()
-        if vk in VALID_DOC_KINDS:
-            out[k.strip()] = vk
+        normalized = normalize_doc_kind_hint(v)
+        if normalized in VALID_DOC_KINDS:
+            out[k.strip()] = normalized
     return out
 
 

@@ -225,6 +225,7 @@ async function resolveWindowsInstallerUrl() {
   // Fallback list: these may become stale, but cover common versions.
   return [
     // Newer versions first
+    'https://github.com/tesseract-ocr/tesseract/releases/download/5.5.0/tesseract-ocr-w64-setup-5.5.0.20241111.exe',
     'https://digi.bib.uni-mannheim.de/tesseract/tesseract-ocr-w64-setup-5.4.0.20240606.exe',
     'https://digi.bib.uni-mannheim.de/tesseract/tesseract-ocr-w64-setup-5.3.4.20240503.exe',
     // Older versions as last resort
@@ -284,6 +285,74 @@ async function findFileRecursive(root, fileName, maxDepth = 4) {
   }
 
   return await walk(root, 0);
+}
+
+function windowsDefaultInstallRoots() {
+  return ['C:\\Program Files\\Tesseract-OCR', 'C:\\Program Files (x86)\\Tesseract-OCR'];
+}
+
+function whereWindowsExe(fileName) {
+  try {
+    const whereRes = spawnSync('where', [fileName], { encoding: 'utf-8' });
+    if (whereRes.error || whereRes.status !== 0) return [];
+    return String(whereRes.stdout || '')
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+async function locateWindowsTesseractExe(destRoot) {
+  const directCandidates = [
+    path.join(destRoot, 'tesseract.exe'),
+    ...windowsDefaultInstallRoots().map((p) => path.join(p, 'tesseract.exe')),
+    ...whereWindowsExe('tesseract.exe'),
+  ];
+
+  for (const candidate of directCandidates) {
+    if (candidate && fs.existsSync(candidate)) return candidate;
+  }
+
+  const rootsToSearch = [destRoot, ...windowsDefaultInstallRoots()].filter((p) => p && fs.existsSync(p));
+  for (const root of rootsToSearch) {
+    const found = await findFileRecursive(root, 'tesseract.exe', 6);
+    if (found) return found;
+  }
+
+  return null;
+}
+
+function tryInstallWindowsTesseractWithWinget() {
+  const wingetCmd = process.env.WINGET_CMD || 'winget';
+  const packageIds = ['UB-Mannheim.TesseractOCR', 'tesseract-ocr.tesseract'];
+
+  for (const id of packageIds) {
+    console.log(`Trying winget fallback package: ${id}`);
+    const res = spawnSync(
+      wingetCmd,
+      [
+        'install',
+        '--id',
+        id,
+        '--silent',
+        '--accept-package-agreements',
+        '--accept-source-agreements',
+        '--disable-interactivity',
+      ],
+      { stdio: 'inherit' }
+    );
+
+    if (!res.error && res.status === 0) {
+      console.log(`winget install succeeded for package: ${id}`);
+      return true;
+    }
+
+    console.warn(`WARN: winget install failed for package ${id} (status=${res.status ?? 'unknown'})`);
+  }
+
+  return false;
 }
 
 function macBrewPrefixes() {
@@ -466,49 +535,39 @@ async function fetchWindows(destRoot, opts) {
     }
   }
 
+  let needWingetFallback = false;
+
   if (lastErr) {
-    throw new Error(
-      `Failed to download Windows Tesseract installer. You can override with TESSERACT_WIN_URL.\n${lastErr?.message || lastErr}`
-    );
-  }
+    needWingetFallback = true;
+  } else {
+    console.log('Running silent install into:', destRoot);
 
-  console.log('Running silent install into:', destRoot);
-
-  // NSIS: /S for silent, /D=... must be last and typically unquoted.
-  const destWin = path.resolve(destRoot);
-  const args = ['/S', `/D=${destWin}`];
-  run(tmpInstaller, args, { windowsHide: true });
-
-  // Locate tesseract.exe.
-  // Some installers ignore /D=... and install to Program Files, so we search a few places.
-  const candidateExePaths = [];
-  candidateExePaths.push(path.join(destRoot, 'tesseract.exe'));
-
-  const foundUnderDest = await findFileRecursive(destRoot, 'tesseract.exe', 6);
-  if (foundUnderDest) candidateExePaths.push(foundUnderDest);
-
-  // Common default install locations.
-  candidateExePaths.push('C:\\Program Files\\Tesseract-OCR\\tesseract.exe');
-  candidateExePaths.push('C:\\Program Files (x86)\\Tesseract-OCR\\tesseract.exe');
-
-  // If installer added it to PATH, use `where`.
-  try {
-    const whereRes = spawnSync('where', ['tesseract.exe'], { encoding: 'utf-8' });
-    if (!whereRes.error && whereRes.status === 0) {
-      const lines = String(whereRes.stdout || '')
-        .split(/\r?\n/)
-        .map((s) => s.trim())
-        .filter(Boolean);
-      for (const p of lines) candidateExePaths.push(p);
+    // NSIS: /S for silent, /D=... must be last and typically unquoted.
+    const destWin = path.resolve(destRoot);
+    const args = ['/S', `/D=${destWin}`];
+    try {
+      run(tmpInstaller, args, { windowsHide: true });
+    } catch (e) {
+      lastErr = e;
+      needWingetFallback = true;
+      console.warn(`WARN: installer execution failed, trying winget fallback: ${e?.message || e}`);
     }
-  } catch {
-    // ignore
   }
 
-  const exePath = candidateExePaths.find((p) => p && fs.existsSync(p));
+  if (needWingetFallback) {
+    console.warn(
+      'WARN: direct installer flow failed. Trying winget fallback.\n' + `${lastErr?.message || lastErr}`
+    );
+    // winget can return non-zero for "already installed/no upgrade" in some environments.
+    // We still continue and verify by locating tesseract.exe afterwards.
+    tryInstallWindowsTesseractWithWinget();
+  }
+
+  const exePath = await locateWindowsTesseractExe(destRoot);
   if (!exePath) {
     throw new Error(
       'tesseract.exe not found after install. The installer may have ignored /D=... or installed somewhere unexpected.\n' +
+        `Direct download error: ${lastErr?.message || 'none'}\n` +
         'Tip: set TESSERACT_WIN_URL to a known-good UB Mannheim installer, or rerun with a different version.'
     );
   }

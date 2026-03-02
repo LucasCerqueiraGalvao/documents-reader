@@ -1,205 +1,82 @@
 # Documents Reader
 
-Document processing pipeline for import/export trade documents with OCR, field extraction, validation and reporting.
+Document processing pipeline for import/export trade documents with OCR, field extraction, comparison/validation, and report generation.
 
 ## Architecture
 
-**Refactored for reusability** - All stages are now callable Python functions that can be:
-- Used programmatically in Python
-- Called via HTTP API from Node.js/Electron
-- Executed from CLI
-- Orchestrated through pipeline
+All stages are callable Python functions and can be used via:
+- Python (programmatic)
+- CLI
+- HTTP API (Flask) for Node.js / Electron
 
-### Pipeline Stages
+Pipeline stages:
+1. Stage 01 - Text extraction (PyMuPDF + OCR fallback)
+2. Stage 02 - Field extraction (`regex` or `llm`)
+3. Stage 03 - Cross-document compare/validation
+4. Stage 04 - Report generation (JSON/Markdown/HTML)
 
-1. **Stage 01** - Text Extraction (PyMuPDF + Tesseract OCR)
-2. **Stage 02** - Field Extraction (Invoice, Packing List, Bill of Lading)
-3. **Stage 03** - Document Comparison & Validation
-4. **Stage 04** - Report Generation (JSON/Markdown/HTML)
+Optional:
+5. Stage 05 - Detailed debug report
 
-## Structure
+## Project Structure
 
-```
+```text
 data/
-  input/importation/raw/     # Input PDFs
-  output/                    # All pipeline outputs
+  input/importation/raw/
+  input/exportation/raw/
+  output/
 src/
   stage_01_text_extract/
   stage_02_field_extract/
   stage_03_compare_docs/
   stage_04_report/
-  pipeline.py                # Main orchestrator
-  api.py                     # HTTP API for Node.js
+  stage_05_debug_report/
+  pipeline.py
+  api.py
 examples/
-  nodejs_client.js           # Node.js/Electron integration
+  electron_app/
+  nodejs_client.js
 ```
 
 ## Installation
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate  # Linux/Mac
-# .venv\Scripts\activate   # Windows
-
+source .venv/bin/activate   # Linux/macOS
+# .venv\Scripts\activate    # Windows
 pip install -r requirements.txt
 ```
 
-**Tesseract OCR** (required for scanned PDFs):
-- macOS: `brew install tesseract tesseract-lang`
-- Ubuntu: `apt-get install tesseract-ocr tesseract-ocr-por`
-- Windows: Download from https://github.com/UB-Mannheim/tesseract/wiki
+Tesseract OCR is optional but recommended for scanned PDFs.
 
-## Usage
+## Run by Flow
 
-### 1. Python CLI - Full Pipeline
+### CLI - importation
 
 ```bash
 python src/pipeline.py \
   --input data/input/importation \
   --output data/output \
   --flow importation \
-  --json  # Optional: JSON output
+  --json
 ```
 
-### 2. Python Programmatic
-
-```python
-from pathlib import Path
-from src.pipeline import run_pipeline, PipelineConfig
-
-config = PipelineConfig(
-    input_dir=Path("data/input/importation"),
-    output_dir=Path("data/output"),
-    flow="importation",
-    ocr_lang="eng+por",
-    ocr_dpi=300
-)
-
-result = run_pipeline(config)
-print(f"Report: {result.output_files['stage_04_html']}")
-```
-
-### 3. HTTP API (for Node.js/Electron)
-
-**Start API server:**
-```bash
-python src/api.py --host 127.0.0.1 --port 5000
-```
-
-**Node.js client:**
-```javascript
-const { DocumentProcessorClient } = require('./examples/nodejs_client');
-
-const client = new DocumentProcessorClient();
-
-const result = await client.processDocuments({
-  inputDir: '/path/to/pdfs',
-  outputDir: '/path/to/output',
-  flow: 'importation'
-});
-
-console.log('Report:', result.output_files.stage_04_html);
-```
-
-### 4. Individual Stages
+### CLI - exportation
 
 ```bash
-# Stage 1: Text extraction
-python src/stage_01_text_extract/extract_text_importation.py \
-  --in data/input/importation/raw \
-  --out data/output/stage_01_text/importation
-
-# Stage 2: Field extraction
-python src/stage_02_field_extract/importation/extract_fields_importation.py \
-  --in data/output/stage_01_text/importation \
-  --out data/output/stage_02_fields/importation
-
-# Stage 3: Comparison
-python src/stage_03_compare_docs/compare_importation.py \
-  --input data/output/stage_02_fields/importation \
-  --output data/output/stage_03_compare/importation
-
-# Stage 4: Report
-python src/stage_04_report/generate_report_importation.py \
-  --stage01 data/output/stage_01_text/importation \
-  --stage02 data/output/stage_02_fields/importation \
-  --stage03 data/output/stage_03_compare/importation/_stage03_comparison.json \
-  --out data/output/stage_04_report/importation
+python src/pipeline.py \
+  --input data/input/exportation \
+  --output data/output \
+  --flow exportation \
+  --json
 ```
 
-## API Endpoints
+`--input` supports these layouts:
+- `<input>/<flow>/raw`
+- `<input>/raw`
+- `<input>` directly containing PDFs
 
-### Full Pipeline
-```
-POST /api/v1/process
-Body: {
-  "input_dir": "/path/to/input",
-  "output_dir": "/path/to/output",
-  "flow": "importation",
-  "ocr_lang": "eng+por",
-  "ocr_dpi": 300
-}
-```
-
-### Single Stage
-```
-POST /api/v1/process/stage/1  # Text extraction
-POST /api/v1/process/stage/2  # Field extraction
-POST /api/v1/process/stage/3  # Comparison
-POST /api/v1/process/stage/4  # Report
-```
-
-### Health Check
-```
-GET /health
-```
-
-## Electron Integration Example
-
-```javascript
-// main.js (Electron main process)
-const { spawn } = require('child_process');
-const path = require('path');
-
-// Start Python API server
-const apiServer = spawn('python', [
-  path.join(__dirname, 'src/api.py'),
-  '--host', '127.0.0.1',
-  '--port', '5000'
-]);
-
-// renderer.js (Electron renderer)
-const { DocumentProcessorClient } = require('./examples/nodejs_client');
-const client = new DocumentProcessorClient('http://127.0.0.1:5000');
-
-ipcRenderer.on('process-documents', async (event, files) => {
-  const result = await client.processDocuments({
-    inputDir: files.inputPath,
-    outputDir: files.outputPath
-  });
-  
-  // Open report in browser
-  shell.openExternal(`file://${result.output_files.stage_04_html}`);
-});
-```
-
-## Output Files
-
-- **Stage 01**: `*_extracted.txt`, `*_extracted.json`
-- **Stage 02**: `*_fields.json`, `_stage02_summary.json`
-- **Stage 03**: `_stage03_comparison.json`
-- **Stage 04**: `_stage04_report.json`, `_stage04_report.html`, `_stage04_report.md`
-
-## Validation Documentation
-
-- Technical reference (Markdown): `docs/importation_checks_reference.md`
-- Executive version (PDF): `docs/importation_checks_reference.pdf`
-
-## Electron App
-
-Working desktop UI is available at [examples/electron_app](examples/electron_app).
-
-Run:
+### Electron UI - importation
 
 ```bash
 cd examples/electron_app
@@ -207,30 +84,218 @@ npm install
 npm start
 ```
 
-Build (Windows/Linux/macOS): see [examples/electron_app/README.md](examples/electron_app/README.md).
+In UI:
+1. Set `Modo = Importation`
+2. Select PDFs
+3. Set document types (`BL`, `HBL`, `INVOICE`, `PACKING LIST`, `DI`, `LI`)
+4. Select Stage 02 engine (`Regex` or `LLM (Codex)`)
+5. Click `Run`
 
-## Document Types Supported
+### Electron UI - exportation
 
-- **Invoice** (Commercial Invoice)
-- **Packing List** (Romaneio)
-- **Bill of Lading** (BL/HBL)
-- **DI** (Declaração de Importação)
-- **LI** (Licença de Importação)
+Use the same app, changing only mode and document types:
+1. Set `Modo = Exportation`
+2. Select PDFs
+3. Set document types (`COMMERCIAL INVOICE`, `PACKING LIST`, `DRAFT BL`, `CERTIFICATE OF ORIGIN`, `CONTAINER DATA`)
+4. Select Stage 02 engine (`Regex` or `LLM (Codex)`)
+5. Click `Run`
 
-## Validation Rules
+### Smoke scripts
 
-- Cross-document field matching (Invoice ↔ Packing List ↔ BL)
-- CNPJ validation (Brazilian tax ID)
-- Shipper/Exporter consistency
-- Weight validation (Net/Gross)
-- Incoterm vs Freight mode compatibility
-- Country of origin/acquisition/provenance
+```bash
+npm --prefix examples/electron_app run smoke
+npm --prefix examples/electron_app run smoke:exportation
+```
 
-## Requirements
+## Programmatic
 
-- Python 3.8+
-- Tesseract OCR (optional, for scanned PDFs)
-- Node.js 16+ (for Electron integration)
+```python
+from pathlib import Path
+from pipeline import PipelineConfig, run_pipeline
+
+config = PipelineConfig(
+    input_dir=Path("data/input/exportation"),
+    output_dir=Path("data/output"),
+    flow="exportation",
+    ocr_lang="eng+por",
+    ocr_dpi=300,
+)
+
+result = run_pipeline(config)
+print(result.success, result.output_files.get("stage_04_html"))
+```
+
+## API
+
+Start server:
+
+```bash
+python src/api.py --host 127.0.0.1 --port 5000
+```
+
+Full pipeline endpoint:
+
+```http
+POST /api/v1/process
+Content-Type: application/json
+
+{
+  "input_dir": "/path/to/input",
+  "output_dir": "/path/to/output",
+  "flow": "importation | exportation",
+  "ocr_lang": "eng+por",
+  "ocr_dpi": 300,
+  "min_chars": 80
+}
+```
+
+Single-stage endpoints:
+
+```http
+POST /api/v1/process/stage/1
+POST /api/v1/process/stage/2
+POST /api/v1/process/stage/3
+POST /api/v1/process/stage/4
+```
+
+For single-stage calls, include `flow` in JSON body when using exportation (`importation` is default).
+
+Health:
+
+```http
+GET /health
+```
+
+## Stage 02 LLM Environment Variables
+
+Core selection:
+- `DOCREADER_STAGE2_ENGINE`
+  - `regex` (default)
+  - `llm`
+
+LLM execution:
+- `DOCREADER_CODEX_CLI_PATH`
+  - Codex CLI command/path (default: `codex`)
+- `DOCREADER_STAGE2_LLM_MODEL`
+  - Optional model override passed to `codex exec -m`
+- `DOCREADER_STAGE2_LLM_TIMEOUT_SEC`
+  - Timeout in seconds (default: `240`)
+- `DOCREADER_STAGE2_LLM_DETAILED_LOG`
+  - `1` to emit detailed Stage 02 LLM logs (`[Stage02-LLM]` / `[Stage02-LLM-EXPORT]`)
+
+Fallback policy:
+- `DOCREADER_STAGE2_LLM_FALLBACK_REGEX`
+  - `0` (recommended): fail-fast if LLM fails
+  - `1`: fallback to regex extractor
+
+Auth context (typically injected by Electron main process):
+- `DOCREADER_CODEX_AUTH_CONTEXT_FILE`
+- `DOCREADER_CODEX_ACCESS_TOKEN`
+- `DOCREADER_CODEX_TOKEN_TYPE`
+- `DOCREADER_CODEX_EXPIRES_AT`
+- `DOCREADER_CODEX_SUB`
+
+## Stage CLI Scripts
+
+Importation:
+- `src/stage_01_text_extract/extract_text_importation.py`
+- `src/stage_02_field_extract/importation/extract_fields_importation.py`
+- `src/stage_03_compare_docs/compare_importation.py`
+- `src/stage_04_report/generate_report_importation.py`
+
+Exportation:
+- `src/stage_01_text_extract/extract_text_exportation.py`
+- `src/stage_02_field_extract/exportation/extract_fields_exportation.py`
+- `src/stage_03_compare_docs/compare_exportation.py`
+- `src/stage_04_report/generate_report_exportation.py`
+
+## Output Files
+
+Both flows generate the same output naming convention:
+- Stage 01: `*_extracted.txt`, `*_extracted.json`
+- Stage 02: `*_fields.json`, `_stage02_summary.json`
+- Stage 03: `_stage03_comparison.json`
+- Stage 04: `_stage04_report.json`, `_stage04_report.html`, `_stage04_report.md`
+
+Both flows:
+- Stage 05: `_stage05_debug_report.json`, `_stage05_debug_report.html`, `_stage05_debug_report.md`
+
+## Troubleshooting
+
+### Pipeline appears stuck in Stage 02 LLM
+
+1. Check UI logs for progress markers:
+   - `[Stage02-LLM]`
+   - `[Stage02-LLM-EXPORT]`
+2. Open the run debug log path shown by Electron (`RUN LOG: ...pipeline_debug.log`)
+3. Re-run with detailed logs:
+   - `DOCREADER_STAGE2_LLM_DETAILED_LOG=1`
+
+### "Codex auth obrigatoria para Stage 02 LLM"
+
+Cause:
+- Stage 02 engine is `llm`, but Codex auth is not connected.
+
+Fix:
+1. Connect Codex in UI
+2. Re-run pipeline
+3. If running CLI/API directly, provide valid Codex session/token context
+
+### "Codex CLI indisponivel" or command not found
+
+Cause:
+- `codex` is not installed or not reachable from process PATH.
+
+Fix:
+1. Verify command:
+   - `codex --version`
+2. If needed, set:
+   - `DOCREADER_CODEX_CLI_PATH=<full path to codex>`
+
+### Stage 02 LLM timeout
+
+Symptom:
+- Error contains `timeout` or `Codex CLI timeout after ...s`.
+
+Fix:
+1. Increase timeout:
+   - `DOCREADER_STAGE2_LLM_TIMEOUT_SEC=360`
+2. Re-run and inspect run log for slow documents/prompts
+
+### Exportation document classified with wrong kind in raw CLI runs
+
+Symptom:
+- Stage 02 output kind does not match expected document type.
+
+Cause:
+- CLI run without `_doc_type_hints.json` relies on filename/content heuristics.
+
+Fix:
+1. Prefer Electron/UI flow (it writes `_doc_type_hints.json`)
+2. Use clear filenames aligned with expected doc type
+3. Validate `*_fields.json` before Stage 03 analysis
+
+### Stage 04 report not generated
+
+1. Ensure Stage 01 and Stage 02 produced expected outputs
+2. Check `_stage03_comparison.json` exists
+3. Re-run pipeline with `--json` and inspect `errors` and `warnings`
+
+## Document Types
+
+Importation:
+- Invoice
+- Packing List
+- BL / HBL
+- DI
+- LI
+
+Exportation:
+- Commercial Invoice
+- Packing List
+- Draft BL
+- Certificate of Origin
+- Container Data
 
 ## License
 

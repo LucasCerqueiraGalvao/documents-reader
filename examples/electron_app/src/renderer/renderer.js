@@ -1,10 +1,23 @@
 ﻿const DOC_TYPES = ['BL', 'HBL', 'INVOICE', 'PACKING LIST', 'DI', 'LI'];
+const FLOW_STORAGE_KEY = 'docReader.flowMode';
+const DOC_TYPES_EXPORTATION = [
+  'COMMERCIAL INVOICE',
+  'PACKING LIST',
+  'DRAFT BL',
+  'CERTIFICATE OF ORIGIN',
+  'CONTAINER DATA',
+];
+const DOC_TYPES_BY_FLOW = {
+  importation: DOC_TYPES,
+  exportation: DOC_TYPES_EXPORTATION,
+};
 
 const state = {
   files: /** @type {Array<{ path: string, name: string, docType: string }>} */ ([]),
   reportPath: null,
   detailedReportPath: null,
   running: false,
+  flow: 'importation',
   stage2Engine: 'regex',
   progress: {
     percent: 0,
@@ -30,6 +43,45 @@ const state = {
 
 function baseName(p) {
   return String(p).split(/[/\\]/).pop();
+}
+
+function normalizeFlow(value) {
+  return String(value || '').trim().toLowerCase() === 'exportation' ? 'exportation' : 'importation';
+}
+
+function flowLabel(flow) {
+  return normalizeFlow(flow) === 'exportation' ? 'Exportation' : 'Importation';
+}
+
+function flowProgressLabel(flow) {
+  return normalizeFlow(flow) === 'exportation' ? 'Exportacao' : 'Importacao';
+}
+
+function loadPersistedFlow() {
+  try {
+    return normalizeFlow(globalThis.localStorage.getItem(FLOW_STORAGE_KEY));
+  } catch {
+    return 'importation';
+  }
+}
+
+function persistFlow(flow) {
+  try {
+    globalThis.localStorage.setItem(FLOW_STORAGE_KEY, normalizeFlow(flow));
+  } catch {
+    // ignore persistence failures
+  }
+}
+
+function getDocTypesForFlow(flow) {
+  return DOC_TYPES_BY_FLOW[normalizeFlow(flow)] || DOC_TYPES_BY_FLOW.importation;
+}
+
+function updateDocTypeLegend() {
+  const el = document.getElementById('docTypeLegend');
+  if (!el) return;
+  const types = getDocTypesForFlow(state.flow);
+  el.textContent = 'Tipo do documento (' + types.join(' / ') + ')';
 }
 
 function setStatus(text) {
@@ -93,32 +145,36 @@ function computeProgressPercent() {
 function syncProgressLabel() {
   const p = state.progress;
   const engineText = normalizeStage2Engine(p.stage2Engine) === 'llm' ? 'LLM' : 'Regex';
+  const flowText = flowProgressLabel(state.flow);
 
   if (p.stage <= 0) {
     setProgress(p.percent, p.label || 'Progresso: aguardando execucao');
     return;
   }
   if (p.stage === 1) {
-    setProgress(computeProgressPercent(), `Stage 01 (OCR): ${p.stage1Done}/${Math.max(1, p.totalDocs)} arquivos`);
+    setProgress(
+      computeProgressPercent(),
+      `Stage 01 (${flowText} OCR): ${p.stage1Done}/${Math.max(1, p.totalDocs)} arquivos`
+    );
     return;
   }
   if (p.stage === 2) {
     setProgress(
       computeProgressPercent(),
-      `Stage 02 (${engineText}): ${p.stage2Done}/${Math.max(1, p.totalDocs)} arquivos`
+      `Stage 02 (${flowText} ${engineText}): ${p.stage2Done}/${Math.max(1, p.totalDocs)} arquivos`
     );
     return;
   }
   if (p.stage === 3) {
-    setProgress(90, 'Stage 03: comparando documentos');
+    setProgress(90, `Stage 03 (${flowText}): comparando documentos`);
     return;
   }
   if (p.stage >= 5) {
-    setProgress(Math.max(p.percent, 99), 'Stage 05: gerando report detalhado');
+    setProgress(Math.max(p.percent, 99), `Stage 05 (${flowText}): gerando report detalhado`);
     return;
   }
   if (p.stage >= 4) {
-    setProgress(Math.max(p.percent, 97), 'Stage 04: gerando report');
+    setProgress(Math.max(p.percent, 97), `Stage 04 (${flowText}): gerando report`);
     return;
   }
 }
@@ -167,7 +223,15 @@ function handlePipelineProgressFromLog(text) {
       continue;
     }
 
-    const llmProcessing = line.match(/^\[Stage02-LLM\]\s+(\d+)\/(\d+)\s+processing/i);
+    const stage2Effective = line.match(/^STAGE2 ENGINE(?: EFFECTIVE)?:\s*(\w+)/i);
+    if (stage2Effective) {
+      state.progress.stage = Math.max(state.progress.stage, 2);
+      state.progress.stage2Engine = normalizeStage2Engine(stage2Effective[1]);
+      syncProgressLabel();
+      continue;
+    }
+
+    const llmProcessing = line.match(/^\[Stage02-LLM(?:-EXPORT)?\]\s+(\d+)\/(\d+)\s+processing/i);
     if (llmProcessing) {
       const idx = Number(llmProcessing[1]) || 1;
       const total = Number(llmProcessing[2]) || state.progress.totalDocs || 1;
@@ -178,7 +242,7 @@ function handlePipelineProgressFromLog(text) {
       continue;
     }
 
-    if (/^\[Stage02-LLM\]\s+OK\s+->\s+.*_fields\.json/i.test(line) || /^OK -> .*_fields\.json/i.test(line)) {
+    if (/^\[Stage02-LLM(?:-EXPORT)?\]\s+OK\s+->\s+.*_fields\.json/i.test(line) || /^OK -> .*_fields\.json/i.test(line)) {
       state.progress.stage = Math.max(state.progress.stage, 2);
       state.progress.stage2Done = Math.min(
         Math.max(1, state.progress.totalDocs),
@@ -188,7 +252,7 @@ function handlePipelineProgressFromLog(text) {
       continue;
     }
 
-    if (/Sa[ií]da:\s+.*_stage03_comparison\.json/i.test(line)) {
+    if (/Sa[ií]da:\s+.*_stage03_comparison\.json/i.test(line) || /Output:\s+.*_stage03_comparison\.json/i.test(line)) {
       state.progress.stage = Math.max(state.progress.stage, 3);
       syncProgressLabel();
       continue;
@@ -321,6 +385,26 @@ function setStage2Engine(nextEngine, options) {
   return true;
 }
 
+function syncFlowControl() {
+  const select = document.getElementById('flowMode');
+  if (!select) return;
+  select.value = normalizeFlow(state.flow);
+  select.disabled = state.running;
+}
+
+function setFlow(nextFlow, options) {
+  const opts = options || {};
+  state.flow = normalizeFlow(nextFlow);
+  persistFlow(state.flow);
+  syncFlowControl();
+  refreshDocTypesForFlow();
+  updateDocTypeLegend();
+  renderFileList();
+  if (opts.logChange) {
+    appendLog('Modo alterado para: ' + flowLabel(state.flow) + '.\n');
+  }
+}
+
 function updateButtons() {
   const btnRun = document.getElementById('btnRun');
   btnRun.disabled = state.running || state.files.length === 0;
@@ -343,6 +427,7 @@ function updateButtons() {
   btnCodexLogout.disabled = authBusy || !auth.connected;
 
   syncStage2EngineControl();
+  syncFlowControl();
 }
 
 function setProjectRootText() {
@@ -464,8 +549,21 @@ async function logoutCodex() {
   }
 }
 
-function normalizeDocType(v) {
-  const up = String(v || '').toUpperCase();
+function normalizeDocType(v, flow) {
+  const selectedFlow = normalizeFlow(flow || state.flow);
+  const up = String(v || '').toUpperCase().trim();
+
+  if (selectedFlow === 'exportation') {
+    if (up === 'COMMERCIAL_INVOICE' || up === 'COMMERCIALINVOICE' || up === 'INVOICE') return 'COMMERCIAL INVOICE';
+    if (up === 'PACKING_LIST' || up === 'PACKINGLIST') return 'PACKING LIST';
+    if (up === 'DRAFT_BL' || up === 'DRAFTBL' || up === 'BL' || up === 'BILL OF LADING' || up === 'BILL_OF_LADING') return 'DRAFT BL';
+    if (up === 'CERTIFICATE_OF_ORIGIN' || up === 'CERTIFICATEOFORIGIN' || up === 'CO') return 'CERTIFICATE OF ORIGIN';
+    if (up === 'CONTAINER_DATA' || up === 'CONTAINERDATA' || up === 'CNTR') return 'CONTAINER DATA';
+
+    if (DOC_TYPES_EXPORTATION.includes(up)) return up;
+    return 'COMMERCIAL INVOICE';
+  }
+
   if (up === 'PACKING_LIST' || up === 'PACKINGLIST') return 'PACKING LIST';
   if (up === 'HBL') return 'HBL';
   if (up === 'DI') return 'DI';
@@ -473,6 +571,18 @@ function normalizeDocType(v) {
   if (DOC_TYPES.includes(up)) return up;
   return 'INVOICE';
 }
+function refreshDocTypesForFlow() {
+  const allowed = getDocTypesForFlow(state.flow);
+  for (const f of state.files) {
+    const normalized = normalizeDocType(f.docType, state.flow);
+    if (!allowed.includes(normalized)) {
+      f.docType = guessDocTypeFromName(f.name, state.flow);
+    } else {
+      f.docType = normalized;
+    }
+  }
+}
+
 
 function renderFileList() {
   const list = document.getElementById('fileList');
@@ -490,14 +600,15 @@ function renderFileList() {
     right.className = 'type-choices';
 
     const groupId = 'docType:' + f.path;
+    const docTypes = getDocTypesForFlow(state.flow);
 
-    for (const t of DOC_TYPES) {
+    for (const t of docTypes) {
       const label = document.createElement('label');
       label.className = 'choice';
 
       const input = document.createElement('input');
       input.type = 'checkbox';
-      input.checked = normalizeDocType(f.docType) === t;
+      input.checked = normalizeDocType(f.docType, state.flow) === t;
 
       input.addEventListener('change', () => {
         if (!input.checked) {
@@ -542,15 +653,26 @@ function addFiles(filePaths) {
     state.files.push({
       path: p,
       name: baseName(p),
-      docType: guessDocTypeFromName(baseName(p)),
+      docType: guessDocTypeFromName(baseName(p), state.flow),
     });
   }
 
   renderFileList();
 }
 
-function guessDocTypeFromName(name) {
+function guessDocTypeFromName(name, flow) {
+  const selectedFlow = normalizeFlow(flow || state.flow);
   const n = String(name || '').toUpperCase();
+
+  if (selectedFlow === 'exportation') {
+    if (n.includes('CONTAINER DATA') || n.includes('DADOS CNTR') || n.includes('CNTR')) return 'CONTAINER DATA';
+    if (n.includes('CERTIFICATE OF ORIGIN') || n.includes('CERTIFICADO DE ORIGEM') || n.includes('CERTIFICATE')) return 'CERTIFICATE OF ORIGIN';
+    if (n.includes('DRAFT BL') || n.includes('B/L') || n.includes('BILL OF LADING') || n.startsWith('BL') || n.includes('LADING')) return 'DRAFT BL';
+    if (n.includes('PACKING')) return 'PACKING LIST';
+    if (n.includes('COMMERCIAL INVOICE') || n.includes('INVOICE') || n.includes('FATURA')) return 'COMMERCIAL INVOICE';
+    return 'COMMERCIAL INVOICE';
+  }
+
   if (n.includes('HBL')) return 'HBL';
   if (n.includes('CONFERENCIA DI') || n.includes('RASCUNHO DI') || n.match(/\bDI\b/) || n.match(/\bDI[\s\-_]*\d+/)) return 'DI';
   if (n.includes('CONFERENCIA LI') || n.includes('RASCUNHO LI') || n.match(/\bLI\b/) || n.match(/\bLI[\s\-_]*\d+/)) return 'LI';
@@ -565,6 +687,31 @@ async function pickFiles() {
   addFiles(filePaths);
 }
 
+function inferUserFacingRunError(res) {
+  const rawError = String((res && res.error) || '');
+  const rawStderr = String((res && res.stderr) || '');
+  const combined = (rawError + '\n' + rawStderr).toLowerCase();
+
+  if (!combined.trim()) return null;
+  if (combined.includes('codex auth obrigatoria para stage 02 llm')) {
+    return 'Stage 02 LLM requer Codex conectado. Conecte o Codex e execute novamente.';
+  }
+  if (combined.includes('codex cli preflight excedeu') || combined.includes('timeout')) {
+    return 'Stage 02 LLM excedeu tempo limite (timeout). Nao houve fallback automatico para regex.';
+  }
+  if (
+    combined.includes('codex cli indisponivel') ||
+    combined.includes('codex cli executable not found') ||
+    combined.includes('command unavailable while executing')
+  ) {
+    return "Codex CLI indisponivel para Stage 02 LLM. Verifique instalacao/comando 'codex'.";
+  }
+  if (combined.includes('stage 02 llm extraction failed') || combined.includes('[stage02-llm') || combined.includes('llm failed')) {
+    return 'A extracao LLM do Stage 02 falhou. Nao houve fallback automatico para regex.';
+  }
+  return null;
+}
+
 async function run() {
   state.running = true;
   resetProgress(state.files.length, state.stage2Engine);
@@ -574,14 +721,16 @@ async function run() {
   setReportPath(null);
   updateButtons();
   clearLog();
-  setStatus('Executando pipeline...');
+  setStatus('Executando pipeline (' + flowLabel(state.flow) + ')...');
 
   await refreshCodexAuthStatus({ autoRefresh: true, logErrors: true });
 
   const payload = {
+    flow: normalizeFlow(state.flow),
     files: state.files.map((f) => ({ path: f.path, docType: f.docType })),
     stage2Engine: normalizeStage2Engine(state.stage2Engine),
   };
+  appendLog('Modo selecionado: ' + flowLabel(state.flow) + '.\n');
   appendLog('Stage 02 engine selecionada: ' + stage2EngineLabel(state.stage2Engine) + '.\n');
 
   try {
@@ -589,11 +738,16 @@ async function run() {
     if (res && res.runLogPath) {
       appendLog('Log detalhado do run: ' + res.runLogPath + '\n');
     }
+    if (res && res.requestedStage2Engine) {
+      const requested = normalizeStage2Engine(res.requestedStage2Engine).toUpperCase();
+      const effective = normalizeStage2Engine(res.effectiveStage2Engine || res.requestedStage2Engine).toUpperCase();
+      appendLog('Stage 02 engine (run): solicitada=' + requested + ' | efetiva=' + effective + '.\n');
+    }
 
     if (res && res.ok) {
       state.reportPath = res.reportPath;
       state.detailedReportPath = res.debugReportPath || null;
-      setStatus('Concluido. Report aberto (Stage 4).');
+      setStatus('Concluido (' + flowLabel(state.flow) + '). Report aberto (Stage 4).');
       setProgress(100, 'Pipeline concluido');
       setReportPath(state.reportPath);
       if (state.detailedReportPath) {
@@ -603,15 +757,17 @@ async function run() {
         appendLog('Codex auth disponivel para stage_02.\n');
       }
     } else {
-      setStatus('Falhou. Veja os logs.');
+      setStatus('Falhou (' + flowLabel(state.flow) + '). Veja os logs.');
       setProgress(100, 'Pipeline falhou');
-      if (res && res.error) appendLog('\nERROR: ' + res.error + '\n');
+      const friendly = inferUserFacingRunError(res);
+      if (friendly) appendLog('\nERROR: ' + friendly + '\n');
+      if (res && res.error) appendLog('\nERROR (tecnico): ' + res.error + '\n');
       if (res && res.stderr) appendLog('\nSTDERR:\n' + res.stderr + '\n');
       setReportPath(null);
       state.detailedReportPath = null;
     }
   } catch (e) {
-    setStatus('Erro ao executar.');
+    setStatus('Erro ao executar (' + flowLabel(state.flow) + ').');
     setProgress(100, 'Erro ao executar pipeline');
     appendLog('\nERROR: ' + String(e) + '\n');
     setReportPath(null);
@@ -686,6 +842,10 @@ function setup() {
   document.getElementById('btnRun').addEventListener('click', run);
   document.getElementById('btnCodexConnect').addEventListener('click', connectCodex);
   document.getElementById('btnCodexLogout').addEventListener('click', logoutCodex);
+  document.getElementById('flowMode').addEventListener('change', (event) => {
+    const requested = normalizeFlow(event && event.target ? event.target.value : 'importation');
+    setFlow(requested, { logChange: true });
+  });
   document.getElementById('stage2Engine').addEventListener('change', (event) => {
     const requested = normalizeStage2Engine(event && event.target ? event.target.value : 'regex');
     const changed = setStage2Engine(requested, { logBlocked: true });
@@ -713,10 +873,10 @@ function setup() {
   setupDragAndDrop();
   setupLogs();
   setupAuthEvents();
-  renderFileList();
+  setFlow(loadPersistedFlow());
   setStage2Engine('regex');
   setCodexAuthText();
-  setStatus('Pronto.');
+  setStatus('Pronto. Modo: ' + flowLabel(state.flow) + '.');
   refreshProjectRoot();
   refreshCodexAuthStatus({ autoRefresh: false, logErrors: false });
 }
@@ -727,3 +887,5 @@ try {
   setStatus('Erro de inicializacao.');
   appendLog('ERROR: falha no setup da interface: ' + String(error) + '\n');
 }
+
+

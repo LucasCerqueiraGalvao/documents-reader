@@ -1095,6 +1095,27 @@ ipcMain.handle('projectRoot:get', async () => {
   };
 });
 
+ipcMain.handle('app:getMeta', async () => {
+  let releaseTag = null;
+  try {
+    const appPackagePath = path.join(app.getAppPath(), 'package.json');
+    const raw = await fsp.readFile(appPackagePath, 'utf-8');
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed.docReaderReleaseTag === 'string') {
+      const normalized = parsed.docReaderReleaseTag.trim();
+      if (normalized) releaseTag = normalized;
+    }
+  } catch {
+    // Keep metadata endpoint resilient even if package.json can't be read.
+  }
+
+  return {
+    name: app.getName(),
+    isPackaged: app.isPackaged,
+    releaseTag,
+  };
+});
+
 ipcMain.handle('projectRoot:select', async () => {
   const result = await dialog.showOpenDialog({
     properties: ['openDirectory'],

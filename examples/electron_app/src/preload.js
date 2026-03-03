@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('docReader', {
   runPipeline: (payload) => ipcRenderer.invoke('pipeline:run', payload),
   openReport: (reportPath) => ipcRenderer.invoke('report:open', reportPath),
   getProjectRoot: () => ipcRenderer.invoke('projectRoot:get'),
+  getAppMeta: () => ipcRenderer.invoke('app:getMeta'),
   selectProjectRoot: () => ipcRenderer.invoke('projectRoot:select'),
   codexAuthGetStatus: (payload) => ipcRenderer.invoke('codexAuth:getStatus', payload),
   codexAuthStart: (payload) => ipcRenderer.invoke('codexAuth:start', payload),

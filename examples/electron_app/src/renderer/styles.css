@@ -18,6 +18,9 @@ body {
   background: radial-gradient(1200px 600px at 10% 10%, rgba(79, 140, 255, 0.18), transparent 60%),
               radial-gradient(900px 500px at 90% 20%, rgba(0, 255, 213, 0.08), transparent 55%),
               var(--bg);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
 
 .header {
@@ -50,9 +53,11 @@ h1 {
 
 .main {
   padding: 18px 20px;
+  padding-bottom: 56px;
   display: grid;
   grid-template-columns: 1fr;
   gap: 16px;
+  flex: 1;
 }
 
 .card {
@@ -254,4 +259,24 @@ h1 {
   margin-top: 10px;
   display: flex;
   justify-content: flex-end;
+}
+
+.app-footer {
+  position: fixed;
+  right: 14px;
+  bottom: 10px;
+  z-index: 20;
+  pointer-events: none;
+}
+
+.app-version {
+  display: inline-block;
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  color: rgba(231, 237, 247, 0.78);
+  background: rgba(16, 26, 46, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  padding: 4px 10px;
+  backdrop-filter: blur(8px);
 }

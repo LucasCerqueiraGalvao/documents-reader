@@ -189,6 +189,7 @@ async function main() {
     'status',
     'reportPath',
     'log',
+    'appVersion',
     'progressPct',
     'progressLabel',
     'progressFill',
@@ -219,6 +220,9 @@ async function main() {
   const docReader = {
     async getProjectRoot() {
       return { projectRoot: 'C:/tmp/project', isPackaged: false };
+    },
+    async getAppMeta() {
+      return { version: '0.1.0', releaseTag: 'vTEST' };
     },
     async codexAuthGetStatus() {
       return {

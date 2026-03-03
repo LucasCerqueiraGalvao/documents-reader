@@ -30,6 +30,9 @@ const state = {
   },
   projectRoot: null,
   isPackaged: false,
+  appMeta: {
+    releaseTag: null,
+  },
   codexAuth: {
     connected: false,
     configured: true,
@@ -441,6 +444,29 @@ function setProjectRootText() {
     return;
   }
   el.textContent = 'Projeto: ' + state.projectRoot;
+}
+
+function setAppVersionText() {
+  const el = document.getElementById('appVersion');
+  if (!el) return;
+
+  el.textContent = 'versao: ' + (state.appMeta.releaseTag || 'sem tag');
+}
+
+async function refreshAppMeta() {
+  setAppVersionText();
+
+  if (!globalThis.docReader || typeof globalThis.docReader.getAppMeta !== 'function') {
+    return;
+  }
+
+  try {
+    const meta = await globalThis.docReader.getAppMeta();
+    state.appMeta.releaseTag = meta && meta.releaseTag ? String(meta.releaseTag) : null;
+    setAppVersionText();
+  } catch {
+    // Keep UI running even if metadata query fails.
+  }
 }
 
 async function refreshProjectRoot() {
@@ -876,8 +902,10 @@ function setup() {
   setFlow(loadPersistedFlow());
   setStage2Engine('regex');
   setCodexAuthText();
+  setAppVersionText();
   setStatus('Pronto. Modo: ' + flowLabel(state.flow) + '.');
   refreshProjectRoot();
+  refreshAppMeta();
   refreshCodexAuthStatus({ autoRefresh: false, logErrors: false });
 }
 

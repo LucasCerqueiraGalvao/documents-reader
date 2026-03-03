@@ -61,6 +61,17 @@ jobs:
         shell: pwsh
         run: npm install
 
+      - name: Inject release tag into app metadata
+        if: startsWith(github.ref, 'refs/tags/')
+        working-directory: examples/electron_app
+        shell: pwsh
+        run: |
+          $pkgPath = "package.json"
+          $pkg = Get-Content $pkgPath -Raw | ConvertFrom-Json
+          $pkg | Add-Member -NotePropertyName docReaderReleaseTag -NotePropertyValue "${{ github.ref_name }}" -Force
+          $pkg | ConvertTo-Json -Depth 100 | Set-Content $pkgPath -Encoding UTF8
+          Write-Host "Embedded release tag in app package.json: $($pkg.docReaderReleaseTag)"
+
       - name: Build Windows installer (full)
         working-directory: examples/electron_app
         shell: pwsh
@@ -84,6 +95,41 @@ jobs:
               exit $LASTEXITCODE
             }
             Start-Sleep -Seconds 20
+          }
+
+      - name: Rename installer artifact with release tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $dist = "examples/electron_app/dist"
+          $tag = "${{ github.ref_name }}"
+
+          $exe = Get-ChildItem -Path $dist -Filter "*.exe" -File |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+
+          if (-not $exe) {
+            throw "No installer .exe found in $dist"
+          }
+
+          $newExeName = "Documents.Reader.Setup.$tag.exe"
+          $newExePath = Join-Path $dist $newExeName
+
+          if (Test-Path $newExePath) {
+            Remove-Item -Force $newExePath
+          }
+
+          Rename-Item -Path $exe.FullName -NewName $newExeName
+          Write-Host "Renamed installer to: $newExeName"
+
+          $oldBlockmapPath = "$($exe.FullName).blockmap"
+          if (Test-Path $oldBlockmapPath) {
+            $newBlockmapPath = "$newExePath.blockmap"
+            if (Test-Path $newBlockmapPath) {
+              Remove-Item -Force $newBlockmapPath
+            }
+            Rename-Item -Path $oldBlockmapPath -NewName "$newExeName.blockmap"
+            Write-Host "Renamed blockmap to: $newExeName.blockmap"
           }
 
       - name: Cleanup old installer artifacts

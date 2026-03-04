@@ -68,9 +68,43 @@ jobs:
         run: |
           $pkgPath = "package.json"
           $pkg = Get-Content $pkgPath -Raw | ConvertFrom-Json
-          $pkg | Add-Member -NotePropertyName docReaderReleaseTag -NotePropertyValue "${{ github.ref_name }}" -Force
+          $tag = "${{ github.ref_name }}".Trim()
+          if (-not $tag) {
+            throw "Release tag is empty."
+          }
+
+          if ($tag -notmatch '^v\d+\.\d+\.\d+(\.\d+)?$') {
+            throw "Tag '$tag' must match v<major>.<minor>.<patch> or v<major>.<minor>.<patch>.<build> (example: v2026.03.04 or v2026.03.04.1)."
+          }
+
+          $parts = $tag.Substring(1).Split('.')
+          $major = [int]$parts[0]
+          $minor = [int]$parts[1]
+          $patch = [int]$parts[2]
+          $semver = "$major.$minor.$patch"
+          $buildVersion = $semver
+          if ($parts.Count -ge 4) {
+            $build = [int]$parts[3]
+            $buildVersion = "$major.$minor.$patch.$build"
+          }
+
+          # Windows "Programs and Features" uses package version/display metadata.
+          $pkg.version = $semver
+          $pkg | Add-Member -NotePropertyName docReaderReleaseTag -NotePropertyValue $tag -Force
+
+          if (-not $pkg.build) {
+            $pkg | Add-Member -NotePropertyName build -NotePropertyValue ([pscustomobject]@{}) -Force
+          }
+          $pkg.build | Add-Member -NotePropertyName buildVersion -NotePropertyValue $buildVersion -Force
+          if (-not $pkg.build.nsis) {
+            $pkg.build | Add-Member -NotePropertyName nsis -NotePropertyValue ([pscustomobject]@{}) -Force
+          }
+          $pkg.build.nsis | Add-Member -NotePropertyName uninstallDisplayName -NotePropertyValue "Documents Reader $tag" -Force
+
           $pkg | ConvertTo-Json -Depth 100 | Set-Content $pkgPath -Encoding UTF8
           Write-Host "Embedded release tag in app package.json: $($pkg.docReaderReleaseTag)"
+          Write-Host "Injected package version for Windows metadata: $($pkg.version)"
+          Write-Host "Injected Windows buildVersion: $($pkg.build.buildVersion)"
 
       - name: Build Windows installer (full)
         working-directory: examples/electron_app

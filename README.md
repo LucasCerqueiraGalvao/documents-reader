@@ -355,6 +355,8 @@ Pipeline de release no GitHub:
 Versionamento visivel no app:
 
 - release tag e injetada em `package.json` (`docReaderReleaseTag`)
+- `package.json.version` e derivada da tag (normalizada para semver, ex.: `v2026.03.04` -> `2026.3.4`) para metadados do Windows
+- NSIS recebe `uninstallDisplayName` com a tag (ex.: `Documents Reader v2026.03.04`)
 - renderer mostra no rodape: `versao: <tag>`
 
 ## Stage 02 - Extracao de campos
@@ -768,14 +770,16 @@ Acao:
 
 ## Versionamento e release
 
-Dois valores convivem no produto:
+No fluxo atual de release, a tag governa o versionamento visivel:
 
-1. Versao do app (`examples/electron_app/package.json`, hoje `0.1.0`).
-2. Tag de release (`vYYYY.MM.DD` ou outra convencao de tag), usada na distribuicao.
+1. Tag de release (`v<major>.<minor>.<patch>` ou `v<major>.<minor>.<patch>.<build>`, ex.: `v2026.03.04` ou `v2026.03.04.1`).
+2. Versao interna do pacote para Windows (semver derivada da tag, ex.: `2026.3.4`, com `buildVersion` opcional ex.: `2026.3.4.1`).
 
 No fluxo atual de release Windows:
 
 - arquivo final publicado: `Documents.Reader.Setup.<tag>.exe`
+- nome no Painel de Controle usa `Documents Reader <tag>`
+- coluna "Versao" no Painel de Controle usa a semver derivada da tag
 - rodape do app mostra a tag publicada (`versao: <tag>`)
 
 Isso facilita rastrear exatamente qual instalador foi baixado/instalado.

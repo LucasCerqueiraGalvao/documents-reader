@@ -143,15 +143,29 @@ def get_field_any(doc: Dict[str, Any], keys: List[str]) -> Tuple[Any, List[str],
 
 def get_container_numbers(doc: Dict[str, Any], key_candidates: List[str]) -> List[str]:
     value, _, _ = get_field_any(doc, key_candidates)
-    if not isinstance(value, list):
-        return []
     out: List[str] = []
-    for item in value:
-        if not isinstance(item, dict):
-            continue
-        cn = str(item.get("container_number") or "").strip().upper()
-        if cn:
-            out.append(cn)
+
+    def _collect_from_any(item: Any) -> None:
+        if item is None:
+            return
+        if isinstance(item, dict):
+            cn = str(item.get("container_number") or "").strip().upper()
+            if cn:
+                out.append(cn)
+                return
+            for v in item.values():
+                _collect_from_any(v)
+            return
+        if isinstance(item, list):
+            for it in item:
+                _collect_from_any(it)
+            return
+        if isinstance(item, str):
+            for m in re.finditer(r"\b([A-Z]{4}\d{7})\b", item.upper()):
+                out.append(m.group(1))
+            return
+
+    _collect_from_any(value)
     return sorted(set(out))
 
 

@@ -19,9 +19,95 @@ async function ensureDir(p) {
   await fsp.mkdir(p, { recursive: true });
 }
 
-async function copyFile(src, dest) {
-  await ensureDir(path.dirname(dest));
-  await fsp.copyFile(src, dest);
+function detectPython(repoRoot) {
+  const candidates = [
+    path.join(repoRoot, '.venv', 'bin', 'python'),
+    path.join(repoRoot, '.venv', 'bin', 'python3'),
+    path.join(repoRoot, '.venv', 'Scripts', 'python.exe'),
+    'python',
+  ];
+
+  for (const candidate of candidates) {
+    if (candidate !== 'python' && !fs.existsSync(candidate)) continue;
+    const probe = spawnSync(candidate, ['--version'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+    if (!probe.error && probe.status === 0) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function generateSyntheticImportationPdfs(python, repoRoot, destRaw) {
+  const script = `
+import os
+from pathlib import Path
+import fitz
+
+dest = Path(os.environ["DOCREADER_SMOKE_RAW"])
+dest.mkdir(parents=True, exist_ok=True)
+
+docs = {
+    "BL.pdf": "\\n".join([
+        "BILL OF LADING",
+        "MASTER BL: TESTMBL001",
+        "HOUSE BL: TESTHBL001",
+        "SHIPPER: TEST SHIPPER LTD",
+        "CONSIGNEE: TEST CONSIGNEE LTD",
+        "PORT OF LOADING: SANTOS",
+        "PORT OF DISCHARGE: NAVEGANTES",
+        "VESSEL: TEST VESSEL",
+        "VOYAGE: 001A",
+        "CONTAINER: TEMU1680211",
+        "SEAL: M1024218",
+    ]),
+    "INVOICE.pdf": "\\n".join([
+        "COMMERCIAL INVOICE",
+        "INVOICE NO: INV-TEST-001",
+        "CNPJ: 03.562.381/0006-03",
+        "INCOTERM: CFR",
+        "NCM: 8703.21.00",
+        "QTY: 12",
+        "NET WEIGHT: 7980,000",
+        "GROSS WEIGHT: 9825,000",
+        "TOTAL: 12345,67",
+    ]),
+    "PACKING LIST.pdf": "\\n".join([
+        "PACKING LIST",
+        "INVOICE NO: INV-TEST-001",
+        "QTY: 12",
+        "PACKAGES: 12",
+        "NET WEIGHT: 7980,000",
+        "GROSS WEIGHT: 9825,000",
+        "VOLUME: 53,772",
+    ]),
+}
+
+for filename, text in docs.items():
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), text)
+    doc.save(str(dest / filename))
+    doc.close()
+`;
+
+  const res = spawnSync(python, ['-c', script], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    windowsHide: true,
+    env: {
+      ...process.env,
+      DOCREADER_SMOKE_RAW: destRaw,
+    },
+  });
+
+  if (res.error || res.status !== 0) {
+    const errText = String(res.stderr || res.stdout || res.error || '').trim();
+    throw new Error(`Failed to generate synthetic smoke PDFs: ${errText || `exit ${res.status}`}`);
+  }
 }
 
 async function main() {
@@ -38,25 +124,21 @@ async function main() {
     process.exit(1);
   }
 
+  const python = detectPython(repoRoot);
+  if (!python) {
+    console.error('ERROR: Python not found. Create .venv and install requirements.');
+    process.exit(1);
+  }
+
   const tmpBase = await fsp.mkdtemp(path.join(os.tmpdir(), 'docreader-smoke-runner-'));
   const inputBase = path.join(tmpBase, 'input');
   const outputBase = path.join(tmpBase, 'output');
 
-  const sampleRaw = path.join(repoRoot, 'data', 'input', 'importation', 'raw');
   const destRaw = path.join(inputBase, 'importation', 'raw');
 
   await ensureDir(destRaw);
   await ensureDir(outputBase);
-
-  const sampleFiles = ['BL.pdf', 'INVOICE.pdf', 'PACKING LIST.pdf'];
-  for (const name of sampleFiles) {
-    const src = path.join(sampleRaw, name);
-    if (!fs.existsSync(src)) {
-      console.error(`ERROR: sample file not found: ${src}`);
-      process.exit(1);
-    }
-    await copyFile(src, path.join(destRaw, name));
-  }
+  generateSyntheticImportationPdfs(python, repoRoot, destRaw);
 
   const res = spawnSync(
     runner,

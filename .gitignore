@@ -1,9 +1,12 @@
 .venv
+.venv/
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
 .pytest_cache/
+.DS_Store
+artifacts/
 
 # Electron example
 .electron_runs/
@@ -23,3 +26,6 @@ data/output/**
 data/output_*/
 docs/importation_update.patch
 docs/importation_checks_reference.html
+
+# Prevent accidental upload of confidential documents
+*.pdf

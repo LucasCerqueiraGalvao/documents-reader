@@ -6,7 +6,7 @@
  * It does NOT launch Electron.
  * It verifies:
  * - `.venv/bin/python` exists in repo root
- * - sample PDFs exist in `data/input/<flow>/raw`
+ * - synthetic PDFs are generated for the selected flow
  * - pipeline runs successfully and generates Stage 4 HTML
  */
 
@@ -43,11 +43,6 @@ async function ensureDir(p) {
   await fsp.mkdir(p, { recursive: true });
 }
 
-async function copyFile(src, dst) {
-  await ensureDir(path.dirname(dst));
-  await fsp.copyFile(src, dst);
-}
-
 function runId() {
   return new Date().toISOString().replaceAll(':', '-').replaceAll('.', '-');
 }
@@ -56,22 +51,126 @@ function normalizeFlow(value) {
   return String(value || '').trim().toLowerCase() === 'exportation' ? 'exportation' : 'importation';
 }
 
-function getImportationSamples() {
-  return ['BL.pdf', 'INVOICE.pdf', 'PACKING LIST.pdf'];
+function generateSyntheticPdfs(python, root, flow, rawDir) {
+  const script = `
+import os
+from pathlib import Path
+import fitz
+
+flow = os.environ["DOCREADER_SMOKE_FLOW"].strip().lower()
+dest = Path(os.environ["DOCREADER_SMOKE_RAW"])
+dest.mkdir(parents=True, exist_ok=True)
+
+docs_importation = {
+    "BL.pdf": "\\n".join([
+        "BILL OF LADING",
+        "MASTER BL: TESTMBL001",
+        "HOUSE BL: TESTHBL001",
+        "SHIPPER: TEST SHIPPER LTD",
+        "CONSIGNEE: TEST CONSIGNEE LTD",
+        "PORT OF LOADING: SANTOS",
+        "PORT OF DISCHARGE: NAVEGANTES",
+        "VESSEL: TEST VESSEL",
+        "VOYAGE: 001A",
+        "CONTAINER: TEMU1680211",
+        "SEAL: M1024218",
+    ]),
+    "INVOICE.pdf": "\\n".join([
+        "COMMERCIAL INVOICE",
+        "INVOICE NO: INV-TEST-001",
+        "CNPJ: 03.562.381/0006-03",
+        "INCOTERM: CFR",
+        "NCM: 8703.21.00",
+        "QTY: 12",
+        "NET WEIGHT: 7980,000",
+        "GROSS WEIGHT: 9825,000",
+        "TOTAL: 12345,67",
+    ]),
+    "PACKING LIST.pdf": "\\n".join([
+        "PACKING LIST",
+        "INVOICE NO: INV-TEST-001",
+        "QTY: 12",
+        "PACKAGES: 12",
+        "NET WEIGHT: 7980,000",
+        "GROSS WEIGHT: 9825,000",
+        "VOLUME: 53,772",
+    ]),
 }
 
-async function getExportationSamples(rawDir) {
-  const entries = await fsp.readdir(rawDir, { withFileTypes: true });
-  const pdfs = entries
-    .filter((entry) => entry.isFile())
-    .map((entry) => entry.name)
-    .filter((name) => name.toLowerCase().endsWith('.pdf'))
-    .sort();
+docs_exportation = {
+    "COMMERCIAL INVOICE TEST.pdf": "\\n".join([
+        "COMMERCIAL INVOICE",
+        "INVOICE NR I-0007/25",
+        "15/02/2026",
+        "PAIS DE ORIGEN BRASIL",
+        "VIA DE TRANSPORTE MARITIMO",
+        "PORT OF LOADING SANTOS",
+        "PORT OF DESTINATION KINGSTON",
+        "PESO BRUTO 9825,000",
+        "PESO NETO 7980,000",
+        "INCOTERMS CFR",
+        "CURRENCY USD",
+        "NCM 8703.21.00",
+        "CNTR 1",
+        "CNPJ 03.562.381/0006-03",
+        "EXPORTER HOME THINGS LTDA",
+        "CONSIGNEE CLIENTE TESTE SA",
+    ]),
+    "PACKING LIST TEST.pdf": "\\n".join([
+        "PACKING LIST NR I-0007/25",
+        "15/02/2026",
+        "PESO BRUTO 9825,000",
+        "PESO NETO 7980,000",
+        "NCM 8703.21.00",
+        "INCOTERMS CFR",
+        "CNTR 1",
+        "TEMU1680211 M1024218 76,98",
+    ]),
+    "DRAFT BL TEST.pdf": "\\n".join([
+        "BILL OF LADING",
+        "FREIGHT PREPAID",
+        "INCOTERM CFR",
+        "NCM 8703.21.00",
+        "DUE 26BR0000001",
+        "RUC BR123456789",
+        "SSZ1234567",
+        "WOODEN PACKAGE: NO",
+        "12 CARTONS",
+        "Net Weight: 7980,000 kg",
+        "Gross Weight: 9825,000 kg",
+        "53,772 CBM",
+        "CNPJ 03.562.381/0006-03",
+        "SHIPPER HOME THINGS LTDA",
+        "CONSIGNEE CLIENTE TESTE SA",
+        "NOTIFY PARTY CLIENTE TESTE SA",
+        "TEMU1680211 M1024218 2100,000 30480",
+    ]),
+}
 
-  if (pdfs.length < 3) {
-    throw new Error(`Expected at least 3 sample PDFs in ${rawDir}, found ${pdfs.length}.`);
+docs = docs_exportation if flow == "exportation" else docs_importation
+for filename, text in docs.items():
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), text)
+    doc.save(str(dest / filename))
+    doc.close()
+`;
+
+  const res = spawnSync(python, ['-c', script], {
+    cwd: root,
+    encoding: 'utf8',
+    windowsHide: true,
+    env: {
+      ...process.env,
+      DOCREADER_SMOKE_FLOW: flow,
+      DOCREADER_SMOKE_RAW: rawDir,
+    },
+  });
+
+  if (res.error || res.status !== 0) {
+    const errText = String(res.stderr || res.stdout || res.error || '').trim();
+    throw new Error(`Failed to generate synthetic smoke PDFs: ${errText || `exit ${res.status}`}`);
   }
-  return pdfs;
 }
 
 async function main() {
@@ -83,21 +182,6 @@ async function main() {
     process.exit(2);
   }
 
-  const sampleRaw = path.join(root, 'data', 'input', flow, 'raw');
-  if (!fs.existsSync(sampleRaw)) {
-    console.error(`ERROR: sample raw folder not found: ${sampleRaw}`);
-    process.exit(3);
-  }
-  const sampleFiles =
-    flow === 'importation' ? getImportationSamples() : await getExportationSamples(sampleRaw);
-  for (const f of sampleFiles) {
-    const p = path.join(sampleRaw, f);
-    if (!fs.existsSync(p)) {
-      console.error(`ERROR: missing sample input: ${p}`);
-      process.exit(4);
-    }
-  }
-
   const runBase = path.join(root, '.electron_runs_smoke', runId());
   const inputBase = path.join(runBase, 'input');
   const outputBase = path.join(runBase, 'output');
@@ -105,11 +189,7 @@ async function main() {
 
   await ensureDir(rawDir);
   await ensureDir(outputBase);
-
-  // Copy samples
-  for (const name of sampleFiles) {
-    await copyFile(path.join(sampleRaw, name), path.join(rawDir, name));
-  }
+  generateSyntheticPdfs(python, root, flow, rawDir);
 
   const args = [
     path.join(root, 'src', 'pipeline.py'),

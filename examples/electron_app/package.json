@@ -2,7 +2,7 @@
   "name": "documents-reader-electron",
   "version": "0.1.0",
   "private": true,
-  "description": "Electron UI for documents_reader pipeline",
+  "description": "Electron UI for the documents-reader pipeline",
   "author": {
     "name": "LG Data Solutions"
   },

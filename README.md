@@ -12,7 +12,7 @@ Este README e a fonte principal da documentacao do projeto.
 
 ## Historical Codex Notes
 
-- Sessoes antigas do Codex ainda podem apontar para o clone legado `documents_reader-main\documents_reader-main`. Esse workspace deve ser tratado como superseded; o repositorio mantido hoje e este `documents_reader`.
+- Sessoes antigas do Codex ainda podem apontar para o clone legado `documents_reader-main\documents_reader-main`. Esse workspace deve ser tratado como superseded; o repositorio mantido hoje e este `documents-reader`.
 - O metadata do instalador Windows precisa continuar derivado da tag de release em `.github/workflows/windows-installer.yml`. Se o Painel de Controle mostrar `0.1.0`, normalmente o problema e um build antigo instalado, nao a release tag atual.
 
 ## Sumario
@@ -90,7 +90,7 @@ Cada stage persiste artefatos em disco para facilitar auditoria, reprocessamento
 ## Estrutura do repositorio
 
 ```text
-documents_reader/
+documents-reader/
 |- src/
 |  |- pipeline.py
 |  |- api.py

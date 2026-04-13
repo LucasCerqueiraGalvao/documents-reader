@@ -10,6 +10,11 @@ Este README e a fonte principal da documentacao do projeto.
 - Conteudo antes distribuido em arquivos separados foi consolidado aqui, incluindo arquitetura e visao geral, modos de execucao (CLI, API, Python, Electron), contratos de Stage 02 e Stage 03, troubleshooting, build/release e versionamento.
 - Arquivos markdown legados foram removidos para reduzir duplicacao e manter governanca documental em um unico ponto.
 
+## Historical Codex Notes
+
+- Sessoes antigas do Codex ainda podem apontar para o clone legado `documents_reader-main\documents_reader-main`. Esse workspace deve ser tratado como superseded; o repositorio mantido hoje e este `documents_reader`.
+- O metadata do instalador Windows precisa continuar derivado da tag de release em `.github/workflows/windows-installer.yml`. Se o Painel de Controle mostrar `0.1.0`, normalmente o problema e um build antigo instalado, nao a release tag atual.
+
 ## Sumario
 
 1. [Objetivo e escopo](#objetivo-e-escopo)
